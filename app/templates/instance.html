@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8">
+  </head>
+  <body>
+    <h1><a href="/">Archive</a> | {{ instance_id }}</h1>
+    <p>Files:</p>
+    <ul>
+      {% for file in files %}
+        <li><a href="/{{ instance_id }}/{{ file | urlencode }}">{{ file }}</a></li>
+      {% endfor %}
+    </ul>
+    <p>Meta: <code>{{ meta }}</code></p>
+
+    <p>Upload file(s):</p>
+    <input type="file" id="fileInput" name="files" multiple><br>
+    <input type="button" value="Submit" onclick="submitUsingFetch();">
+    <p id="resp"></p>
+    <script>
+      async function submitUsingFetch() {
+        var resp = document.getElementById("resp");
+        var fileInput = document.getElementById('fileInput');
+
+        if (fileInput.files[0]) {
+          var formData = new FormData();
+          var headers = new Headers();
+
+          var i = 0;
+          for (const file of fileInput.files) {
+            filename = encodeURI(file.name);
+            headers.append(`filename${i}`, filename);
+            formData.append(`file${i}`, file, filename);
+            i++;
+          }
+
+          await fetch('/{{ instance_id }}/_add', {
+            method: 'POST',
+            headers: headers,
+            body: formData,
+          })
+          .then(response => response.json())
+          .catch(error => {
+              console.error(error);
+          });
+        } else {
+          resp.innerHTML = "Please choose some file(s)...";
+          resp.style.color = "red";
+        }
+      }
+    </script>
+    
+    <form action="_finalize" method="POST">
+      <input type="submit" value="Finalize">
+    </form>
+  </body>
+</html>
