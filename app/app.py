@@ -2,17 +2,13 @@ from fastapi import FastAPI, Request, HTTPException, File, UploadFile, status
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse,RedirectResponse,JSONResponse,FileResponse,StreamingResponse
 from starlette.requests import ClientDisconnect
-from urllib.parse import unquote
-import streaming_form_data
-from streaming_form_data import StreamingFormDataParser
-from streaming_form_data.targets import FileTarget, ValueTarget
 from fastapi.templating import Jinja2Templates
 from uuid_utils import uuid7
-from utils import split_path,safe_path
+from utils import split_path,safe_path,save_to_tmp
 
 from typing import List
 from os import getenv,walk,listdir,makedirs
-from os.path import exists,join
+from os.path import exists,join,dirname
 import logging
 from json import dumps,loads
 import shutil
@@ -41,7 +37,6 @@ def _create_new_instance(**meta):
     path = _resolve(instance_id)
 
     if not exists(path):
-        #makedirs(path)
         makedirs(join(path, 'data'))
     
     with open(join(path, '_meta.json'), 'w') as f:
@@ -51,6 +46,9 @@ def _create_new_instance(**meta):
                 **meta
             },
             indent=4))
+        
+    with open(join(path, '_files.json'), 'w') as f:
+        f.write(dumps([], indent=4))
     
     # TODO: lock _instances.txt
     with open(join(DATA_DIR, '_instances.txt'), 'a') as f:
@@ -100,46 +98,51 @@ async def add_files(instance_id: str, request: Request):
     if _meta(instance_id)['status'] == 'finalized':
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='Instance is finalized')
 
+    # TODO: lock instance
     # TODO: check version
 
+    tmpdir = join(_resolve(instance_id), f'.tmp-{str(uuid7())}')
+    touched=False
     try:
-        parser = StreamingFormDataParser(headers=request.headers)
-        data = ValueTarget()
-        parser.register('data', data)
-        
-        headers = dict(request.headers)
-        filenames = []
-        i =0
-        logging.info(f"Headers: {headers}")
+        filenames, checksums = await save_to_tmp(instance_id, tmpdir, request)
 
-        while True:
-            filename = headers.get(f'filename{i}', None)
-            if filename is None:
-                break
+        # TODO: validate file checksums against supplied checksums
 
-            filename = safe_path(unquote(filename))
-            filenames.append(filename)
-            filepath = _resolve(instance_id, filename)
-            logging.info(f"Uploading {filename} to {filepath}")
+        # check if all files exists in tmpdir
+        for filename in filenames:
+            if not exists(join(tmpdir, filename)):
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail='File {filename} not found in request')
+            
+        # move files to final location
+        for filename in filenames:
+            target_path = _resolve(instance_id, filename)
 
-            file_ = FileTarget(filepath)
-            parser.register(f'file{i}', file_)
-            i += 1
-        
-        # TODO: calculate checksum while streaming
-        async for chunk in request.stream():
-            #print('CHONK!')
-            parser.data_received(chunk)
+            if not exists(dirname(target_path)):
+                makedirs(dirname(target_path))
+
+            shutil.move(join(tmpdir, filename), target_path)
+            touched=True
+
+        # TODO: (optionally) validate files in final location
     except ClientDisconnect:
         logging.warning("Client Disconnected")
+    except HTTPException as e:
+        logging.warning(e)
+        raise e
     except Exception as e:
         logging.exception(e)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
-            detail='There was an error uploading the file') 
-    
-    _touch(instance_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+            detail='There was an error uploading the file(s)')
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
-    return { "message": f"Successfuly uploaded {filenames}"}
+        if touched:
+            _touch(instance_id)
+
+    logging.info(f"filenames: {filenames}, checksums: {checksums}")
+
+    return { "files": checksums }
 
 
 @app.get("/_instances", response_class=JSONResponse)
@@ -166,6 +169,9 @@ async def get_file(instance_id: str, filename: str):
 async def get_collection(instance_id: str, request: Request):
     if not exists(_resolve(instance_id)):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Instance not found')
+
+    if request.headers.get('Accept') == 'application/json':
+        return { **_meta(instance_id), "files": _list_files(instance_id) }
 
     return templates.TemplateResponse(
                 "instance.html",

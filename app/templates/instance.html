@@ -40,6 +40,9 @@
             body: formData,
           })
           .then(response => response.json())
+          .then(data => {
+              window.location = '/{{ instance_id }}';
+          })
           .catch(error => {
               console.error(error);
           });
