@@ -4,7 +4,7 @@ from fastapi.responses import HTMLResponse,RedirectResponse,JSONResponse,FileRes
 from starlette.requests import ClientDisconnect
 from fastapi.templating import Jinja2Templates
 from uuid_utils import uuid7
-from utils import split_path,safe_path,save_to_tmp
+from tiniestarchive.utils import split_path,safe_path,save_to_tmp
 
 from typing import List
 from os import getenv,walk,listdir,makedirs
@@ -106,13 +106,13 @@ async def add_files(instance_id: str, request: Request):
     try:
         filenames, checksums = await save_to_tmp(instance_id, tmpdir, request)
 
-        # TODO: validate file checksums against supplied checksums
-
-        # check if all files exists in tmpdir
+        # check if all files exists in tmpdir and validate
         for filename in filenames:
             if not exists(join(tmpdir, filename)):
                 raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail='File {filename} not found in request')
             
+            # TODO: validate file checksum against supplied checksum
+
         # move files to final location
         for filename in filenames:
             target_path = _resolve(instance_id, filename)
@@ -120,9 +120,10 @@ async def add_files(instance_id: str, request: Request):
             if not exists(dirname(target_path)):
                 makedirs(dirname(target_path))
 
+            # move within the same filesystem assumed to be atomic
             shutil.move(join(tmpdir, filename), target_path)
             touched=True
-
+            
         # TODO: (optionally) validate files in final location
     except ClientDisconnect:
         logging.warning("Client Disconnected")
