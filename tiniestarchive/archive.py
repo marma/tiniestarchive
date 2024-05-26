@@ -7,12 +7,20 @@ import shutil
 from typing import Iterable
 from uuid_utils import uuid7
 from pathlib import Path
+from time import time
 from .utils import split_path, safe_path
 
 SPECIAL_FILES = [ '_meta.json', '_files.json' ]
 
+class EventLogger:
+    def __init__(self, filename):
+        self.filename = filename
+
+    def log(self, ref : str, event : str):
+        self.filename.write_text(f"{time()}\t{ref}\t{event}\n")
+
 class Instance:
-    def __init__(self, instance_id : str, path : str, mode='r', tmp_path : str = None):
+    def __init__(self, instance_id : str, path : str, mode='r', tmp_path : str = None, logger : EventLogger = None):
         if mode not in [ '1', 't', 'r', 'w', 'a']:
             raise Exception(f"Invalid mode: {mode}")
 
@@ -29,12 +37,16 @@ class Instance:
         self.path = tmp_path or path
         self.target_path = path
         self.mode = mode
+        self.logger = logger
 
         if not exists(self.path):
             makedirs(join(self.path, 'data'))
             self.config = { "@id": f"urn:uuid:{instance_id}", "version": str(uuid7()), "status": "open" }
             self.files = []
             self._save()
+
+            if mode == 'w':
+                self.logger.log(self.instance_id, 'create')
         else:
             if mode in [ 'a' ] and self.config['status'] == 'finalized':
                 raise Exception('Instance is finalized')
@@ -72,6 +84,9 @@ class Instance:
             with open(self._resolve(path), 'w' if isinstance(data, str) else 'wb') as f:
                 f.write(data)
 
+        if self.mode in [ 'w', 'a' ]:
+            self.logger.log(f'{self.instance_id}/{path}', 'add')
+
         self.files.append(path)
         self._touch()
 
@@ -80,14 +95,26 @@ class Instance:
             raise Exception('Instance is already finalized')
 
         self.config['status'] = 'finalized'
+        self.logger.log(self.instance_id, 'finalize')
         self._save()
 
     def commit(self):
+        if self.mode not in [ '1', 't' ]:
+            raise Exception('Commit only allowed in temporary or write-once mode')
+
         parent_dir = Path(self.target_path).parent
         parent_dir.mkdir(parents=True, exist_ok=True)
         shutil.move(self.path, parent_dir)
         self.path = self.target_path
-        mode = 'r'
+
+        self.logger.log(self.instance_id, 'create')
+        for f in self.files:
+            self.logger.log(f'{self.instance_id}/{f}', 'add')
+
+        if self.mode == '1':
+            self.finalize()
+
+        self.mode = 'r'
 
     def _reload(self):
         with open(join(self.path, '_meta.json'), 'r') as f, open(join(self.path, '_files.json'), 'r') as g:
@@ -116,9 +143,9 @@ class Instance:
             else:
                 self.commit()
 
-        if self.mode == '1':
-            self.finalize()
 
+    def __repr__(self):
+        return f"<Instance({self.instance_id}) @ {hex(id(self))}>"
 
 class Archive:
     def __init__(self, path : str, mode='r'):
@@ -142,8 +169,11 @@ class Archive:
             self.root_dir.mkdir(parents=True, exist_ok=True)
             self.root_dir.joinpath('config.json').write_text(dumps(self.config, indent=4))
             self.root_dir.joinpath('instances.txt').write_text('')
+            self.root_dir.joinpath('log.txt').write_text('')
         else:
             self.config = loads(self.root_dir.joinpath('config.json').read_text())
+
+        self.logger = EventLogger(self.root_dir.joinpath('log.txt'))
 
         self.mode = mode
 
@@ -156,7 +186,7 @@ class Archive:
 
         path = self._resolve(instance_id)
 
-        return Instance(instance_id, path, mode)
+        return Instance(instance_id, path, mode, logger=self.logger)
 
     def new(self, mode : str = 't') -> Instance:
         if self.mode == 'r':
@@ -171,12 +201,13 @@ class Archive:
         tmp_path = None
         if mode in [ '1', 't' ]:
             tmp_path = self.root_dir.joinpath(path_segments[0], 'staging', instance_id)
-            path = self.root_dir.joinpath(*path_segments)
+
+        path = self.root_dir.joinpath(*path_segments)
 
         with self.root_dir.joinpath('instances.txt').open(mode='a') as f:
             f.write(f"{instance_id}\n")
 
-        return Instance(instance_id, path, mode=mode, tmp_path=tmp_path)
+        return Instance(instance_id, path=path, mode=mode, tmp_path=tmp_path, logger=self.logger)
 
     def open(self, instance_id: str, filename : str, mode='r') -> BufferedIOBase:
         if mode not in [ 'r', 'rb' ]:
@@ -206,3 +237,4 @@ class Archive:
     def __exit__(self, type, value, traceback):
         ...
 
+    
