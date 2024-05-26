@@ -17,7 +17,8 @@ class EventLogger:
         self.filename = filename
 
     def log(self, ref : str, event : str):
-        self.filename.write_text(f"{time()}\t{ref}\t{event}\n")
+        with self.filename.open('a') as f:
+            f.write(f"{time()}\t{ref}\t{event}\n")
 
 class Instance:
     def __init__(self, instance_id : str, path : str, mode='r', tmp_path : str = None, logger : EventLogger = None):
@@ -220,7 +221,17 @@ class Archive:
             return f.read()
 
     def events(self, start=None, listen=False) -> Iterable:
-        return iter([])
+        # TODO: optimize
+        e = self.root_dir.joinpath("log.txt").read_text().splitlines()
+
+        for l in e:
+            ts, ref, event = l.split('\t')
+            
+            if start and ts < start:
+                continue
+
+            yield { "timestamp": ts, "ref": ref, "event": event }
+
 
     def _new_id(self) -> str:
         return str(uuid7())
