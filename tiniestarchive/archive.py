@@ -36,7 +36,7 @@ class Instance:
 
         self.instance_id = instance_id
         self.path = tmp_path or path
-        self.target_path = path
+        self.target_path = path if tmp_path else None
         self.mode = mode
         self.logger = logger
 
@@ -49,10 +49,9 @@ class Instance:
             if mode == 'w':
                 self.logger.log(self.instance_id, 'create')
         else:
+            self._reload()
             if mode in [ 'a' ] and self.config['status'] == 'finalized':
                 raise Exception('Instance is finalized')
-
-            self._reload()
 
     def open(self, path, mode='r') -> BufferedIOBase:
         if mode not in [ 'r', 'rb' ]:
@@ -148,6 +147,7 @@ class Instance:
     def __repr__(self):
         return f"<Instance({self.instance_id}) @ {hex(id(self))}>"
 
+
 class Archive:
     def __init__(self, path : str, mode='r'):
         path = Path(copy(path))
@@ -177,6 +177,9 @@ class Archive:
         self.logger = EventLogger(self.root_dir.joinpath('log.txt'))
 
         self.mode = mode
+
+    def meta(self, instance_id: str) -> dict:
+        return loads(self._resolve(instance_id).joinpath('_meta.json').read_text())
 
     def get(self, instance_id: str, mode : str = 'r') -> Instance:
         if mode not in [ 'r', 'a' ]:
@@ -220,6 +223,9 @@ class Archive:
         with self.open(instance_id, filename, mode=mode) as f:
             return f.read()
 
+    def files(self, instance_id : str) -> list[str]:
+        return loads(self._resolve(instance_id).joinpath('_files.json').read_text())
+
     def events(self, start=None, listen=False) -> Iterable:
         # TODO: optimize
         e = self.root_dir.joinpath("log.txt").read_text().splitlines()
@@ -227,17 +233,19 @@ class Archive:
         for l in e:
             ts, ref, event = l.split('\t')
             
-            if start and ts < start:
+            if start and ts <= str(start):
                 continue
 
             yield { "timestamp": ts, "ref": ref, "event": event }
-
 
     def _new_id(self) -> str:
         return str(uuid7())
 
     def _resolve(self, instance_id: str, filename: str = None) -> str:
         return self.root_dir.joinpath(*split_path(instance_id), *(['data', filename] if filename else []))
+
+    def __iter__(self):
+        return iter(self.root_dir.joinpath('instances.txt').read_text().splitlines())
 
     def __getitem__(self, instance_id: str) -> Instance:
         return self.get(instance_id)
