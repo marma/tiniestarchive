@@ -9,6 +9,7 @@ services:
       - LOG_LEVEL=INFO
     volumes:
       - ./app:/app
+      - ./tiniestarchive:/app/tiniestarchive
     ports:
       - "8080:80"      
 

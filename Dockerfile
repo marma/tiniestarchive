@@ -1,6 +1,7 @@
 FROM ubuntu:22.04
 
 ADD ./app /app
+ADD ./tiniestarchive /app/tiniestarchive
 
 COPY requirements.txt /
 

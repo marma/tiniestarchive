@@ -14,10 +14,19 @@
     <p>Meta: <code>{{ meta }}</code></p>
 
     <p>Upload file(s):</p>
+    <form action="_add" method="POST" enctype="multipart/form-data">
+      <input type="file" name="files" multiple><br>
+      <input type="submit" value="Submit">
+    </form>
+    </p>
+    
+
+    <!--p>Upload file(s):</p>
     <input type="file" id="fileInput" name="files" multiple><br>
     <input type="button" value="Submit" onclick="submitUsingFetch();">
-    <p id="resp"></p>
-    <script>
+    <p id="resp"></p-->
+
+    <!--script>
       async function submitUsingFetch() {
         var resp = document.getElementById("resp");
         var fileInput = document.getElementById('fileInput');
@@ -51,7 +60,7 @@
           resp.style.color = "red";
         }
       }
-    </script>
+    </script-->
     
     <form action="_finalize" method="POST">
       <input type="submit" value="Finalize">
