@@ -6,7 +6,7 @@ The Tiniest Archive is an attempt at building a minimal archive that still suppo
 
 ## Archive, Instance and Transaction objects
 
-
+A Transaction is simply a temporary Instance. The Transaction will be merged into the Instance when `commit()` is called on it. This is done by the ContextManager.
 
 ### Usage - create instance and add file
 
@@ -20,9 +20,9 @@ with Archive('https://example.org/') as archive:
         instance.add('car.png')
 ```
 
-### Usage - add file to instance
+### Usage - add file to existing instance 
 
-`archive.get(...)` will, depending on the `mode` parameter, return either a Transaction (for `mode='a'`) or an Instance (for the default `mode='r'`).
+`archive.get(...)` will, depending on the `mode` parameter, return either a Transaction (for `mode='a'`) or an Instance (for the default `mode='r'`). Take care when using `mode='a'` without a ContextManager, as the Transaction will not be committed automatically, but rather leave a temporary Instance behind.
 
 ```
 from tiniestarchive import Archive
@@ -62,5 +62,7 @@ from tiniestarchive import Archive
 
 with Archive('https://example.org/') as archive:
     for event in archive.events(start='2021-12-01T12:00:00Z'):
-        print(event.instance_id)
+        print(event)
 ```
+
+### Usage - 

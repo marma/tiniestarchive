@@ -10,7 +10,7 @@ from pathlib import Path
 from time import time
 from .utils import split_path, safe_path
 
-SPECIAL_FILES = [ '_meta.json', '_files.json' ]
+SPECIAL_FILES = [ '_meta.json', '_files.json', '_checksums.json' ]
 
 class EventLogger:
     def __init__(self, filename):
@@ -19,7 +19,7 @@ class EventLogger:
     def log(self, ref : str, event : str):
         with self.filename.open('a') as f:
             f.write(f"{time()}\t{ref}\t{event}\n")
-
+        
 class FileInstance:
     def __init__(self, instance_id : str, path : str, mode='r', tmp_path : str = None, logger : EventLogger = None):
         if mode not in [ '1', 't', 'r', 'w', 'a']:
@@ -55,7 +55,7 @@ class FileInstance:
 
     def serialize(self) -> Iterable[bytes]:
         raise Exception('Not implemented')
-
+        
     def open(self, path, mode='r') -> BufferedIOBase:
         if mode not in [ 'r', 'rb' ]:
             raise Exception(f"Invalid mode: {mode}")
@@ -93,7 +93,9 @@ class FileInstance:
         if self.mode in [ 'w', 'a' ]:
             self.logger.log(f'{self.instance_id}/{path}', 'add')
 
-        self.files.append(path)
+        if file not in self.files:
+            self.files.append(path)
+
         self._touch()
 
     def finalize(self):
@@ -222,6 +224,9 @@ class FileArchive:
         raise Exception('Not implemented')
 
     def deserialize(self, data: Instance|bytes|Iterable[bytes] = None, instance_id: str = None, ):
+        raise Exception('Not implemented')
+
+    def merge(self, instance, taget_id):
         raise Exception('Not implemented')
 
     def open(self, instance_id: str, filename : str, mode='r') -> BufferedIOBase:
