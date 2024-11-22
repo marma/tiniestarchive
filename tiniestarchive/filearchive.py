@@ -16,29 +16,38 @@ class EventLogger:
     def __init__(self, filename):
         self.filename = filename
 
-    def log(self, ref : str, event : str):
+    def log(self, ref : str, event : str, transaction_id : str = None):
         with self.filename.open('a') as f:
-            f.write(f"{time()}\t{ref}\t{event}\n")
-        
+            f.write(f"{time()}\t{ref}\t{event}{('\t' + transaction_id) if transaction_id else ''}\n")
+
+
 class FileInstance:
-    def __init__(self, instance_id : str, path : str, mode='r', tmp_path : str = None, logger : EventLogger = None):
-        if mode not in [ '1', 't', 'r', 'w', 'a']:
+    def __init__(self, path : str,  instance_id : str = uuid7().hex, mode : str = 'r', target_path : str = None, target_version : str = None, logger : EventLogger = None, archive = None):
+        if mode not in [ '1', 't', 'r', 'w' ]:
             raise Exception(f"Invalid mode: {mode}")
 
-        if mode in [ '1', 't' ] and not tmp_path:
-            raise Exception("Temporary path must be provided for mode '1' or 't'")
+        if mode in [ '1', 't' ] and not target_path or mode in [ 'r', 'w'] and target_path:
+            raise Exception("Target path must be provided for mode 't', and must not for 'r', 'w'")
 
-        if mode in [ 'r', 'a'] and not exists(path):
+        if mode in [ 'r', 'w' ] and not exists(path):
             raise Exception('Instance does not exist')
 
-        if mode in [ '1', 'w', 't' ] and exists(path):
-            raise Exception('Instance already exists')
+        if mode in [ 't' ] and exists(path):
+            raise Exception('Path already exists')
+
+        if mode == '1' and exists(target_path):
+            raise Exception('Target path already exists')
+
+        if mode == 't' and archive.finalized(path=target_path):
+            raise Exception("Target instance is finalized")
 
         self.instance_id = instance_id
-        self.path = tmp_path or path
-        self.target_path = path if tmp_path else None
+        self.path = path
+        self.target_path = target_path
+        self.target_version = target_version
         self.mode = mode
         self.logger = logger
+        self.archive = archive
 
         if not exists(self.path):
             makedirs(join(self.path, 'data'))
@@ -48,9 +57,13 @@ class FileInstance:
 
             if mode == 'w':
                 self.logger.log(self.instance_id, 'create')
+
+            if self.target_id:
+                self.config['target_id'] = self.target_id
         else:
             self._reload()
-            if mode in [ 'a' ] and self.config['status'] == 'finalized':
+
+            if mode in [ 'w' ] and self.config['status'] == 'finalized':
                 raise Exception('Instance is finalized')
 
     def serialize(self) -> Iterable[bytes]:
@@ -90,8 +103,7 @@ class FileInstance:
             with open(self._resolve(path), 'wb') as f:
                 shutil.copyfileobj(fobj, f)
 
-        if self.mode in [ 'w', 'a' ]:
-            self.logger.log(f'{self.instance_id}/{path}', 'add')
+        self.logger.log(f'{self.instance_id}/{path}', 'add')
 
         if file not in self.files:
             self.files.append(path)
@@ -107,17 +119,32 @@ class FileInstance:
         self._save()
 
     def commit(self):
-        if self.mode not in [ '1', 't' ]:
-            raise Exception('Commit only allowed in temporary or write-once mode')
+        if self.mode is '1' or self.mode is 't' and not exists(self.target_path):
+            # simply rename/move the directory
+            self.logger.log(self.instance_id, 'commit', self.version)
+            parent_dir = Path(self.target_path).parent
+            parent_dir.mkdir(parents=True, exist_ok=True)
+            shutil.move(self.path, parent_dir)
+            self.path = self.target_path
+            self.target_path = None
+            self.target_version = None
+        elif self.mode is 't' and exists(self.target_path):
+            # merge the staging directory into the target location
+            with self.archive.get(self.target_id, mode='w') as target:
+                # TODO: lock target instance
+                # TODO: check target version against last known version
+                for f in self.files:
+                    shutil.move(self._resolve(f), self.archive._resolve(p.path, f))
+                    self.logger.log(f'{self.instance_id}/{f}', 'add')
 
-        parent_dir = Path(self.target_path).parent
-        parent_dir.mkdir(parents=True, exist_ok=True)
-        shutil.move(self.path, parent_dir)
-        self.path = self.target_path
-
-        self.logger.log(self.instance_id, 'create')
-        for f in self.files:
-            self.logger.log(f'{self.instance_id}/{f}', 'add')
+                self.path = self.target_path
+                self.target_path = None
+                self.target_version = None
+                
+                # remove the staging directory
+                shutil.rmtree(self.path)
+        else:
+            raise Exception('Commit only allowed in transaction or write-once mode')
 
         if self.mode == '1':
             self.finalize()
@@ -146,6 +173,7 @@ class FileInstance:
     
     def __exit__(self, type, value, traceback):
         if self.mode in [ '1', 't' ]:
+            # remove the directory on error
             if type:
                 shutil.rmtree(self.path)
             else:
@@ -226,8 +254,16 @@ class FileArchive:
     def deserialize(self, data: Instance|bytes|Iterable[bytes] = None, instance_id: str = None, ):
         raise Exception('Not implemented')
 
-    def merge(self, instance, taget_id):
-        raise Exception('Not implemented')
+    def commit(self, instance, target_id):
+        target_dir = self._resolve(target_id)
+
+        # can we simply rename/move the directory?
+        if instance.mode in [ 't', '1' ] and not self.exists(target_id):
+            # simply move the staging directory to the target location
+            shutil.move(instance.path, self._resolve(target_id))
+        else:
+            # merge the staging directory into the target location
+            raise Exception('Not implemented')
 
     def open(self, instance_id: str, filename : str, mode='r') -> BufferedIOBase:
         if mode not in [ 'r', 'rb' ]:
@@ -241,6 +277,9 @@ class FileArchive:
 
     def files(self, instance_id : str) -> list[str]:
         return loads(self._resolve(instance_id).joinpath('_files.json').read_text())
+
+    def exists(self, instance_id : str) -> bool:
+        return self._resolve(instance_id).exists()
 
     def events(self, start=None, listen=False) -> Iterable:
         # TODO: optimize
