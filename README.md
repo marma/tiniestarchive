@@ -23,13 +23,21 @@ Complexity adds to the probability of failure so important things need to have a
 
 
 
-### Write-once, read many
+### Feature: Write-once, read many
 
 The archive should optionally be able to operate in a write-once-read-many (WORM) mode. This means that files are never deleted or changed. Optimally this mode should be backed by a storage solution that enforces this mode of operation[1,2].
 
+### Feature: Merge-on-migrate
+
+
+
+### Feature: using checksums to avoid storing the same file more than once within a `PackageResource`
+
+- Check every added file against existing checksums in finalized `Instance`s so that only one copy is actually saved to disk
+
 ## Archive, Instance and Transaction objects
 
-A Transaction is simply a temporary Instance. The Transaction will be merged (or moved) into the target Instance when `commit()` is called on it. This is done by the ContextManager.
+A Transaction is simply a temporary Instance. The Transaction will be merged (or moved) into the target `Instance` when `commit()` is called on it. This is done by the ContextManager.
 
 ### Usage - create instance and add file
 
@@ -110,9 +118,9 @@ Tiniestarchive uses BagIt with a profile[3]
 |-- manifest-md5.txt
 ```
 
-#### Optionals
+### Optionals
 
-- Check every added file against existing checksums in finalized `Instance`s so that only one copy is actually saved to disk
+
 
 1. https://en.wikipedia.org/wiki/Write_once_read_many
 2. https://en.wikipedia.org/wiki/Append-only
