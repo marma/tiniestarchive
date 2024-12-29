@@ -6,6 +6,9 @@ from os import makedirs
 from os.path import exists, join, dirname
 import logging
 from urllib.parse import unquote
+from uuid import uuid4
+from tempfile import gettempdir
+from shutil import rmtree, move
 
 def split_path(u):
     SPLITS = [ 0, 4, 6, 8, 10 ]
@@ -52,3 +55,4 @@ async def save_to_tmp(instance_id, tmpdir, request):
         parser.data_received(chunk)
 
     return filenames, { key:('sha256:' + value.value) for key,value in checksums.items() }
+

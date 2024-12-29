@@ -2,9 +2,9 @@
 
 ** This is currently experimental software not intended for production use  **
 
-The Tiniest Archive is an attempt at building a minimal digital archive that still support basic OAIS functionality.
+The Tiniest Archive is an attempt at building a minimal digital archive that still support some OAIS fundamentals through the use of package instances and package resources. It does, on purpose, not deal with metadata or any understanding of the content within these instances/resources. The aim is to provide a clear separation between package descriptions / file integrity and information conserning 
 
-## Design
+## Design considerations
 
 ### Simplicity 
 
