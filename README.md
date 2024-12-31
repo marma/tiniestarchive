@@ -2,9 +2,19 @@
 
 ** This is currently experimental software not intended for production use  **
 
-The Tiniest Archive is an attempt at building a minimal digital archive that still support some OAIS fundamentals through the use of package instances and package resources. It does, on purpose, not deal with metadata or any understanding of the content within these instances/resources. The aim is to provide a clear separation between package descriptions / file integrity and information conserning 
+The Tiniest Archive is an attempt at building a minimal digital archive that still support some OAIS fundamentals through the use of package instances and package resources. It does, on purpose, not deal with metadata or any understanding of the content within these instances/resources. The aim is to provide a clear separation between package descriptions / file integrity and information concerning 
 
 ## Design considerations
+
+Three modes of operation:
+
+- Preservation mode - In this mode no instance files will ever get updated, overwritten or deleted, but rather replaced only using new instances that will logically replace or delete files.
+
+- WORM mode - a sub-mode of Preservation mode where all files, even the package resource description and administrative files, can only be written once and never updated, deleted or renamed. This puts extra pressure on the disk and comput and so lowers performance. This is a problem that should be solved using caching (see `CachedArchive`).
+
+- Dynamic mode - in "Dynamic mode" files can be changed, deleted and updated.
+
+Optimally these two modes can be combined using `MultiArchive` with one archive in preservation mode and one (or more) in dynamic mode.
 
 ### Simplicity 
 
@@ -13,7 +23,6 @@ Complexity adds to the probability of failure so important things need to have a
 - Few and and atomic operations that either succeed or fail in a very visible manner and can then be rolled back
 - Using the archive as it exists on disk as a single source of truth, i.e no database or index should be used to ensure that operations maintain the integrity of the archive
 
-
 ### Robustness
 
 - Errors/mistakes/bad code on the client side must **never** result in broken packages
@@ -21,7 +30,9 @@ Complexity adds to the probability of failure so important things need to have a
 
 ### Flexibility
 
+### Code base size
 
+The core code base should be fewer lines than this README-file.
 
 ### Feature: Write-once, read many
 
@@ -37,7 +48,7 @@ The archive should optionally be able to operate in a write-once-read-many (WORM
 
 ## Archive, Instance and Transaction objects
 
-A Transaction is simply a temporary Instance. The Transaction will be merged (or moved) into the target `Instance` when `commit()` is called on it. This is done by the ContextManager.
+A Transaction is simply a temporary Instance. The Transaction will be merged (or moved) into the target `Instance` when `commit()` is called on it. This is done by the CommitManager.
 
 ### Usage - create instance and add file
 
@@ -47,8 +58,9 @@ A Transaction is simply a temporary Instance. The Transaction will be merged (or
 from tiniestarchive import Archive
 
 with Archive('https://example.org/') as archive:
-    with archive.new() as instance:
-        instance.add('car.png')
+    with archive.new() as resource:
+        with resource.new() as transaction:
+            resource.add('car.png')
 ```
 
 ### Usage - add file to existing instance 

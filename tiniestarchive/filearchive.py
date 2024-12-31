@@ -5,7 +5,7 @@ from json import dumps, load, loads
 from os import makedirs, listdir, remove, rename
 from os.path import join,exists
 from posixpath import dirname
-import shutil
+from shutil import move,copy
 from typing import Iterable
 from uuid_utils import uuid7
 from pathlib import Path
@@ -22,25 +22,18 @@ class EventLogger:
 
 
 class FileInstance:
-    def __init__(self, path : str,  instance_id : str, mode : str = 'r'):
+    def __init__(self, base : str, mode : str = 'r'):
         self.path = self.path
-        self.instance_id = instance_id
+        self.mode = mode
 
-        if mode == 'w' and (not exists(self.path) or len(listdir(self.path)) == 0):
-            makedirs(join(self.path, 'data'))
-            self.config = { "@id": f"urn:uuid:{instance_id}", "version": str(uuid7()), "status": "open" }
-            self.files = {}
-            self._save()
-        elif self._is_package(self.path):
-            self._reload()
+        with open(join(self.path, 'instance.json'), 'r') as f:
+            self.config = load(f)
 
-            if mode == 'w' and self.config['status'] == 'finalized':
-                raise Exception('Instance is finalized')
-        else:
-            raise Exception(f'Directory {self.path} is neither empty nor a valid instance')
+        self.instance_id = self.config['id']
 
-    def serialize(self) -> Iterable[bytes]:
-        raise Exception('Not implemented')
+        if self.mode == 'w' and self.config['status'] == 'finalized':
+            raise Exception('Instance is finalized')
+
         
     def open(self, path, mode='r') -> BufferedIOBase:
         if mode not in [ 'r', 'rb' ]:
@@ -76,7 +69,7 @@ class FileInstance:
 
             rename(tmpfile, self._resolve(path))
 
-            self.files[path] = { 'path': path, 'size': size, 'checksum': f'md5:{cs.hexdigest()}' }
+            self.config['files'][path] = { 'path': path, 'size': size, 'checksum': f'md5:{cs.hexdigest()}' }
 
             # this is suboptimal when adding a large number of files
             self._save()
@@ -85,59 +78,83 @@ class FileInstance:
                 remove(tmpfile)
                 
             raise e
+        
+    def delete(self, path : str):
+        if self.mode != 'w':
+            raise Exception("Deleting files only allowed in 'w' mode")
 
-    def finalize(self):
+        self.config['files'][path] = { 'path': path, 'status': 'deleted' }
+
+        if exists(f := self._resolve(path)):
+            remove(f)
+
+        self._save()
+
+    def merge(self, instance : Instance):
+        # WARNING: this is an operation that can fail half-way through with
+        # no easy way to recover leaving the instance in an inconsistent state
+        if self.mode != 'w':
+            raise Exception("Merging instances only allowed in 'w' mode")
+
+        for path in instance:
+            if instance[path].get('status', None) == 'deleted':
+                self.delete(path)
+            else:
+                source = instance._resolve(path)
+                target = self._resolve(path)
+
+                # @TODO: handle checksums
+
+                move(source, target)
+                self.files[path] = instance[path]
+
+        self._save()
+
+    def resolve(self, path : str) -> str:
+        return join(self.path, 'data', path)
+
+    def serialize(self) -> Iterable[bytes]:
+        raise Exception('Not implemented')
+
+    def _finalize(self):
         if self.config['status'] == 'finalized':
             raise Exception('Instance is already finalized')
 
         self.config['status'] = 'finalized'
         self._save()
 
-    def _reload(self):
-        with open(join(self.path, 'instance.json'), 'r') as f, open(join(self.path, 'files.json'), 'r') as g:
-            self.config = load(f)
-            self.files = load(g)
-
     def _save(self):
+        self.config['version'] = str(uuid7())
         with open(join(self.path, 'instance.json'), 'w') as f, open(join(self.path, 'files.json'), 'w') as g:
             f.write(dumps(self.config, indent=4))
             g.write(dumps(self.files, indent=4))
 
-    def _touch(self):
-        self.config['version'] = str(uuid7())
+
+    def _remove(self, path):
+        del(self.config['files'][path])
         self._save()
 
-    def _resolve(self, path : str) -> str:
-        return join(self.path, 'data', path)
-    
-    def _is_package(self, path : str) -> bool:
-        return all(
-                    exists(join(path, 'data')),
-                    exists(join(path, 'instance.json')),
-                    exists(join(path, 'files.json'))
-                )
+    def __iter__(self):
+        return iter(self.config['files'].keys())
 
 
 class FileResource:
-    def __init__(self, path : str, mode='r'):
+    def __init__(self, path : str):
         self.path = path
 
-        if mode == 'r' and not exists(path):
-            raise Exception(f'Resource ({path}) does not exist')
+        with open(join(self.path, 'resource.json'), 'r') as f:
+            self.config = load(f)
 
-        if mode == 'w' and not exists(path):
-            makedirs(path)
-            makedirs(path.joinpath('instances'))
+        # @TODO: add file map
+        # @TODO: add checksum map
 
-        
-        self.config = self._load_config()
-        self.instances = self._load_instances()
+    def __iter__(self):
+        return iter(self.config['instances'].keys())
 
-
-
-    def _load_config(self):
-        with open(self.path.joinpath('resource.json'), 'r') as f:
-            return load(f)
+    def _resolve(self, path : str) -> str:
+        for instance_id in reversed(self.config['instances']):
+            if exists(f := join(self.path, instance_id, 'data', path)):
+                return f
 
 class FileArchive:
     def __init__(self, path : str = None, mode='r'):
