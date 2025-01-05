@@ -6,10 +6,12 @@ from tempfile import gettempdir
 from uuid import uuid4
 
 class CommitManager(object):
-    def __init__(self, target_dir : str, wrappee_fun, tmpdir : str = None):
+    def __init__(self, target_dir : str, wrappee_fun, tmpdir : str = None, resource = None, archive = None):
         self.wrappee_fun = wrappee_fun
         self.tmpdir = tmpdir
         self.target_dir = target_dir
+        self.resource = resource
+        self.archive = archive
 
     def __enter__(self):
         if not self.tmpdir:
@@ -20,8 +22,6 @@ class CommitManager(object):
         
         if exists(self.target_dir):
             raise Exception("Target directory already exists")
-
-        makedirs(self.tmpdir)
 
         self.wrappee = self.wrappee_fun(self.tmpdir)
 

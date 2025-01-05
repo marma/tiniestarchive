@@ -2,15 +2,18 @@ from copy import copy
 from hashlib import md5
 from io import BufferedIOBase, BufferedReader
 from json import dumps, load, loads
-from os import makedirs, listdir, remove, rename
+from os import makedirs, listdir, remove, rename, stat
 from os.path import join,exists
 from posixpath import dirname
 from shutil import move,copy
 from typing import Iterable
+from tiniestarchive.commitmanager import CommitManager
 from uuid_utils import uuid7
 from pathlib import Path
 from time import time
 from .utils import split_path, safe_path
+from enum import Enum
+from . import Archive,Instance,READ,READ_BINARY,WRITE,FINALIZED,DELETED
 
 class EventLogger:
     def __init__(self, filename):
@@ -20,64 +23,34 @@ class EventLogger:
         with self.filename.open('a') as f:
             f.write(f"{time()}\t{ref}\t{event}{('\t' + transaction_id) if transaction_id else ''}\n")
 
-
-class FileInstance:
-    def __init__(self, base : str, mode : str = 'r'):
+class FileInstance(Instance):
+    def __init__(self, base : str, mode : str = READ):
         self.path = self.path
         self.mode = mode
 
-        with open(join(self.path, 'instance.json'), 'r') as f:
+        if not exists(self.path) and mode == WRITE:
+            FileInstance.create(self.path)
+
+        with open(join(self.path, 'instance.json'), READ) as f:
             self.config = load(f)
 
         self.instance_id = self.config['id']
 
-        if self.mode == 'w' and self.config['status'] == 'finalized':
+        if self.mode == WRITE and self.config['status'] == FINALIZED:
             raise Exception('Instance is finalized')
 
-        
-    def open(self, path, mode='r') -> BufferedIOBase:
-        if mode not in [ 'r', 'rb' ]:
+    def open(self, path, mode=READ) -> BufferedIOBase:
+        if mode not in [ READ, READ_BINARY ]:
             raise Exception(f"Invalid mode: {mode}")
 
         return open(self._resolve(path), mode)
 
-    def read(self, path, mode='r') -> str | bytes:  
-        if mode not in [ 'r', 'rb' ]:
+    def read(self, path, mode=READ) -> str | bytes:  
+        if mode not in [ READ, READ_BINARY ]:
             raise Exception(f"Invalid mode: {mode}")
 
         with self.open(path, mode) as f:
             return f.read()       
-
-    def add(self, path : str, data : BufferedReader, checksum : str = None):
-        if self.mode != 'w':
-            raise Exception("Adding files only allowed in 'w' mode")
-
-        tmpfile = join(self._resolve(path), '-tmp-', str(uuid7()))
-
-        try:
-            if not exists(d := dirname(tmpfile)):
-                makedirs(d)
-
-            cs,size = md5(), 0
-            with open(tmpfile, 'wb') as f:
-                while chunk := data.read(1024):
-                    cs.update(chunk)
-                    size += f.write(chunk)
-
-            if checksum and checksum == cs.hexdigest():
-                raise Exception('Checksum mismatch')
-
-            rename(tmpfile, self._resolve(path))
-
-            self.config['files'][path] = { 'path': path, 'size': size, 'checksum': f'md5:{cs.hexdigest()}' }
-
-            # this is suboptimal when adding a large number of files
-            self._save()
-        except Exception as e:
-            if exists(tmpfile):
-                remove(tmpfile)
-                
-            raise e
         
     def delete(self, path : str):
         if self.mode != 'w':
@@ -91,44 +64,88 @@ class FileInstance:
         self._save()
 
     def merge(self, instance : Instance):
-        # WARNING: this is an operation that can fail half-way through with
-        # no easy way to recover leaving the instance in an inconsistent state
-        if self.mode != 'w':
+        # WARNING: this is an operation that can fail half-way through given
+        # catastrophic loss of connection to the storage. With no way to
+        # recover this would leave the instance in an inconsistent state.
+        # However, individual files will be either written in full or not at
+        # all since shutil.move is atomic within the same filesystem
+        if self.mode != WRITE:
             raise Exception("Merging instances only allowed in 'w' mode")
 
         for path in instance:
-            if instance[path].get('status', None) == 'deleted':
+            if instance[path].get('status', None) == DELETED:
                 self.delete(path)
             else:
                 source = instance._resolve(path)
                 target = self._resolve(path)
 
-                # @TODO: handle checksums
+                # will shutil.move be nonatomic?
+                if stat(source).st_dev != stat(target).st_dev:
+                    tmp_target = f'{target}-tmp-{str(uuid7())}'
+                    move(source, tmp_target)
+                    source = tmp_target
 
+                # this operation is atomic
                 move(source, target)
+
                 self.files[path] = instance[path]
 
         self._save()
 
-    def resolve(self, path : str) -> str:
-        return join(self.path, 'data', path)
-
     def serialize(self) -> Iterable[bytes]:
         raise Exception('Not implemented')
 
-    def _finalize(self):
-        if self.config['status'] == 'finalized':
+    def finalize(self):
+        if self.config['status'] == FINALIZED:
             raise Exception('Instance is already finalized')
 
-        self.config['status'] = 'finalized'
+        self.config['status'] = FINALIZED
         self._save()
+
+    def create(path : str):
+        if exists(path):
+            raise Exception('Path already exists')  
+        
+        makedirs(join(path, 'data'))
+
+        with open(join(path, 'instance.json'), 'w') as f:
+            f.write(dumps({ 'id': str(uuid7()), 'version': str(uuid7()), 'status': 'open', 'files': {} }, indent=4))
+
+    def _resolve(self, path : str) -> str:
+        return join(self.path, 'data', path)
+
+    def _add(self, path : str, data : BufferedReader, checksum : str = None):
+        if self.mode != WRITE:
+            raise Exception("Adding files only allowed in 'w' mode")
+
+        tmpfile = f'{self._resolve(path)}-tmp-{str(uuid7())}'
+
+        try:
+            if not exists(d := dirname(tmpfile)):
+                makedirs(d)
+
+            cs,size = md5(), 0
+            with open(tmpfile, 'wb') as f:
+                while chunk := data.read(1024):
+                    cs.update(chunk)
+                    size += f.write(chunk)
+
+            if checksum and checksum.lower() == cs.hexdigest().lower():
+                raise Exception('Checksum mismatch')
+
+            rename(tmpfile, self._resolve(path))
+
+            self.config['files'][path] = { 'path': path, 'size': size, 'checksum': f'md5:{cs.hexdigest()}' }
+        except Exception as e:
+            if exists(tmpfile):
+                remove(tmpfile)
+                
+            raise e
 
     def _save(self):
         self.config['version'] = str(uuid7())
-        with open(join(self.path, 'instance.json'), 'w') as f, open(join(self.path, 'files.json'), 'w') as g:
+        with open(join(self.path, 'instance.json'), 'w') as f:
             f.write(dumps(self.config, indent=4))
-            g.write(dumps(self.files, indent=4))
-
 
     def _remove(self, path):
         del(self.config['files'][path])
@@ -139,14 +156,44 @@ class FileInstance:
 
 
 class FileResource:
-    def __init__(self, path : str):
+    def __init__(self, path : str, mode : str = 'r', archive : Archive = None):
         self.path = path
+        self.mode = mode
+        self._archive = archive
+
+        if not exists(self.path) and mode == READ:
+            FileResource.create(self.path)
 
         with open(join(self.path, 'resource.json'), 'r') as f:
             self.config = load(f)
 
         # @TODO: add file map
         # @TODO: add checksum map
+
+    def transaction(self) -> CommitManager:
+        if self.mode == READ:
+            raise Exception('Resource is in read-only mode')
+
+        if self.config.get('status', None) == 'finalized':
+            raise Exception('Resource is finalized')
+
+        return self._archive.transaction(resource=self)
+
+    def create(path : str):
+        if not exists(path):
+            makedirs(path)
+        
+        makedirs(join(path, 'instances'))
+
+        instance_id = str(uuid7())
+        instance_path = join(path, 'instances', instance_id)
+        FileInstance.create(instance_path)
+
+        with open(join(path, 'resource.json'), 'w') as f:
+            f.write(dumps({ 'id': str(uuid7()), 'version': str(uuid7()), 'status': 'open', 'instances': [ instance_id ] }, indent=4))
+
+    def _add_instance(self, instance : Instance):
+        ...
 
     def __iter__(self):
         return iter(self.config['instances'].keys())
@@ -157,13 +204,13 @@ class FileResource:
                 return f
 
 class FileArchive:
-    def __init__(self, path : str = None, mode='r'):
+    def __init__(self, path : str = None, mode=READ):
         path = Path(copy(path))
 
-        if mode not in [ 'r', 'w' ]:
+        if mode not in [ READ, WRITE ]:
             raise Exception(f"Invalid mode: {mode}")
 
-        if mode == 'r' and not path.exists():
+        if mode == READ and not path.exists():
             raise Exception(f'Archive ({path}) does not exist')
 
         if path.is_file():
@@ -249,7 +296,7 @@ class FileArchive:
             return f.read()
 
     def files(self, instance_id : str) -> list[str]:
-        return loads(self._resolve(instance_id).joinpath('_files.json').read_text())
+        return self.config['files'].keys()
 
     def exists(self, instance_id : str) -> bool:
         return self._resolve(instance_id).exists()
