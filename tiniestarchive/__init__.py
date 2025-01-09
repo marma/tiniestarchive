@@ -1,11 +1,4 @@
-from .archive import Archive,Instance
-from .filearchive import FileArchive,FileInstance
-from .httparchive import HttpArchive,HttpInstance
+from .archive import Archive,Resource,Instance,READ,READ_BINARY,WRITE,OPEN,FINALIZED,DELETED
+from .filearchive import FileArchive,FileResource,FileInstance
+from .httparchive import HttpArchive,HttpResource
 
-OPEN = 'open'
-FINALIZED = 'finalized'
-DELETED = 'deleted'
-
-READ = 'r'
-READ_BINARY = 'rb'
-WRITE = 'w'

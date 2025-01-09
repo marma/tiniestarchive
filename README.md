@@ -23,6 +23,8 @@ Complexity adds to the probability of failure so important things need to have a
 - Few and and atomic operations that either succeed or fail in a very visible manner and can then be rolled back
 - Using the archive as it exists on disk as a single source of truth, i.e no database or index should be used to ensure that operations maintain the integrity of the archive
 
+### Design for operations
+
 ### Robustness
 
 - Errors/mistakes/bad code on the client side must **never** result in broken packages

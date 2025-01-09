@@ -1,5 +1,13 @@
 import tiniestarchive
 
+OPEN = 'open'
+FINALIZED = 'finalized'
+DELETED = 'deleted'
+
+READ = 'r'
+READ_BINARY = 'rb'
+WRITE = 'w'
+
 class Archive:
     def __new__(cls, root=None, **kwargs):
         if root:

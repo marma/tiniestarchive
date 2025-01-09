@@ -6,12 +6,10 @@ from tempfile import gettempdir
 from uuid import uuid4
 
 class CommitManager(object):
-    def __init__(self, target_dir : str, wrappee_fun, tmpdir : str = None, resource = None, archive = None):
-        self.wrappee_fun = wrappee_fun
+    def __init__(self, resource, instance_fun, tmpdir : str = None):
+        self.instance_fun = instance_fun
         self.tmpdir = tmpdir
-        self.target_dir = target_dir
         self.resource = resource
-        self.archive = archive
 
     def __enter__(self):
         if not self.tmpdir:
@@ -23,18 +21,14 @@ class CommitManager(object):
         if exists(self.target_dir):
             raise Exception("Target directory already exists")
 
-        self.wrappee = self.wrappee_fun(self.tmpdir)
+        self.instance = self.instance_fun(self.tmpdir)
 
-        return self.wrappee
+        return self.instance
 
     def __exit__(self, exc_type, exc_value, traceback):
-        if exc_type:
-            #print(f'rmtree({self.tmpdir})', file=stderr)
-            rmtree(self.tmpdir)
-        else:
-            if self.tmpdir != self.target_dir:
-                if exists(self.target_dir):
-                    raise Exception("Target directory already exists")
-
-                #print(f'move({self.tmpdir}, {self.target_dir})', file=stderr)
-                move(self.tmpdir, self.target_dir)
+        try:
+            if not exc_type:
+                self.resource.update(self.instance)
+        finally:
+            if exists(self.tmpdir):
+                rmtree(self.tmpdir)
