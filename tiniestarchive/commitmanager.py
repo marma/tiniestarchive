@@ -18,9 +18,6 @@ class CommitManager(object):
         if exists(self.tmpdir):
             raise Exception("Temporary directory already exists")
         
-        if exists(self.target_dir):
-            raise Exception("Target directory already exists")
-
         self.instance = self.instance_fun(self.tmpdir)
 
         return self.instance
@@ -31,4 +28,5 @@ class CommitManager(object):
                 self.resource.update(self.instance)
         finally:
             if exists(self.tmpdir):
-                rmtree(self.tmpdir)
+                print(f'rmtree({self.tmpdir})', file=stderr)
+                #rmtree(self.tmpdir)

@@ -22,7 +22,7 @@ class Resource:
             if isinstance(root, str) and root.startswith('http'):
                 return super(Resource, tiniestarchive.HttpResource).__new__(tiniestarchive.HttpResource)
 
-        return super(Archive, tiniestarchive.FileResource).__new__(tiniestarchive.FileResource)
+        return super(Resource, tiniestarchive.FileResource).__new__(tiniestarchive.FileResource)
     
 class Instance:
     def __new__(cls, root=None, **kwargs):
@@ -30,5 +30,5 @@ class Instance:
             if isinstance(root, str) and root.startswith('http'):
                 return super(Resource, tiniestarchive.HttpInstance).__new__(tiniestarchive.HttpInstance)
 
-        return super(Archive, tiniestarchive.FileInstance).__new__(tiniestarchive.FileInstance)
+        return super(Instance, tiniestarchive.FileInstance).__new__(tiniestarchive.FileInstance)
     

@@ -29,8 +29,8 @@ class EventLogger:
             f.write(dumps(x))
 
 class FileInstance(Instance):
-    def __init__(self, base : str, mode : str = READ, resource_id : str = None):
-        self.path = self.path
+    def __init__(self, path : str, mode : str = READ, resource_id : str = None):
+        self.path = path
         self.mode = mode
 
         if not exists(self.path) and mode == WRITE:
@@ -181,19 +181,20 @@ class FileResource:
             raise Exception('Resource is finalized')
 
     def transaction(self) -> CommitManager:
-        self._writeable_check()
+        self._writable_check()
 
         if self.status() == FINALIZED:
             raise Exception('Resource is finalized')
 
-        return CommitManager(self, self, lambda x: FileInstance(x, mode=WRITE))
+        return CommitManager(self, lambda x: FileInstance(x, mode=WRITE))
 
     def update(self, instance : Instance):
         self._writable_check()
 
         last_instance = self.get_instance(self.config['instances'][-1])
         if last_instance.status() == OPEN:
-            # merge the instances
+            # open in write-mode merge the instances
+            last_instance = self.get_instance(self.config['instances'][-1], mode=WRITE)
             last_instance.update(instance)
         else:
             # would shutil.move be nonatomic?
@@ -262,6 +263,7 @@ class FileResource:
         return self.config['status']
 
     def _save(self):
+        self.config['version'] = str(uuid7())
         with open(join(self.path, 'resource.json'), 'w') as f:
             f.write(dumps(self.config, indent=4))
 
@@ -279,7 +281,9 @@ class FileResource:
         # create resolve and checksum maps
         self.files, self.checksums = {}, {}
         for instance_id in self.config['instances']:
-            j = join(self.path, 'instances', instance_id, 'instance.json')
+            with open(join(self.path, 'instances', instance_id, 'instance.json')) as f:
+                j = load(f)
+
             self.files.update(
                 {
                   x['path']:(join('instances', instance_id, x['path']) if x.get('status', None) != DELETED else None)
