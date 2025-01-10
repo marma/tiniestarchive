@@ -8,11 +8,11 @@ The Tiniest Archive is an attempt at building a minimal digital archive that sti
 
 Three modes of operation:
 
-- Preservation mode - In this mode no instance files will ever get updated, overwritten or deleted in-place. Rather files will be replaced only by adding new instances that will logically add, replace or delete files. 
+- *Preservation mode* - In this mode no instance files will ever get updated, overwritten or deleted in-place. Rather files will be replaced only by adding new instances that will logically add, replace or delete files. 
 
-- WORM mode - a sub-mode of Preservation mode where all files, even the package resource description and administrative files, can only be written once and never updated, deleted or renamed. This puts extra pressure on the disk and compute which lowers performance. This is a problem that should be solved outside of the archive using caching (see `CachedArchive`).
+- *WORM mode* - a sub-mode of Preservation mode where all files, even the package resource description and administrative files, can only be written once and never updated, deleted or renamed. This puts extra pressure on the disk and compute which lowers performance. This is a problem that should be solved outside of the archive using caching (see `CachedArchive`).
 
-- Unsafe mode - in "Unsafe mode" files *can* be changed, deleted and updated.
+- *Unsafe mode* - in "Unsafe mode" files *can* be changed, deleted and updated.
 
 Optimally these modes can be combined using `MultiArchive` with one archive in preservation mode and one (or more) in unsafe mode.
 

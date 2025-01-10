@@ -1,19 +1,23 @@
 from copy import copy
 from hashlib import md5
+from sys import stderr
 from io import BufferedIOBase, BufferedReader
 from json import dumps, load, loads
 from os import makedirs, listdir, remove, rename, stat
 from os.path import join,exists
 from posixpath import dirname
-from shutil import move,copy
+from shutil import move,copy, rmtree
+from tempfile import gettempdir
 from typing import Iterable, Union
-from tiniestarchive.commitmanager import CommitManager
+from .commitmanager import CommitManager
+from .ingestmanager import IngestManager
 from uuid_utils import uuid7
+from uuid import uuid4
 from pathlib import Path
 from time import time
 from .utils import split_path, safe_path
 from enum import Enum
-from . import Archive,Instance,READ,READ_BINARY,WRITE,OPEN,FINALIZED,DELETED
+from . import Archive,Instance,READ,READ_BINARY,WRITE,OPEN,FINALIZED,DELETED,READ_ONLY,READ_WRITE
 
 class EventLogger:
     def __init__(self, filename):
@@ -29,12 +33,12 @@ class EventLogger:
             f.write(dumps(x))
 
 class FileInstance(Instance):
-    def __init__(self, path : str, mode : str = READ, resource_id : str = None):
-        self.path = path
+    def __init__(self, path : str, mode : str = READ):
+        self.path = Path(path) if path else gettempdir().joinpath(str(uuid4()))
         self.mode = mode
 
-        if not exists(self.path) and mode == WRITE:
-            FileInstance.create(self.path, resource_id)
+        if not self.path.exists() and mode == WRITE:
+            FileInstance.create(self.path)
 
         with open(join(self.path, 'instance.json'), READ) as f:
             self.config = load(f)
@@ -54,6 +58,7 @@ class FileInstance(Instance):
         if mode not in [ READ, READ_BINARY ]:
             raise Exception(f"Invalid mode: {mode}")
 
+        return self._resolve(path).read(mode)
         with self.open(path, mode) as f:
             return f.read()       
         
@@ -93,36 +98,12 @@ class FileInstance(Instance):
                 # this operation is atomic
                 move(source, target)
 
-                self.files[path] = instance[path]
+                self.config['files'][path] = instance[path]
 
+        self.config['version'] = str(uuid7())
         self._save()
 
-    def serialize(self) -> Iterable[bytes]:
-        raise Exception('Not implemented')
-
-    def finalize(self):
-        if self.config['status'] == FINALIZED:
-            raise Exception('Instance is already finalized')
-
-        self.config['status'] = FINALIZED
-        self._save()
-
-    def create(path : str, resource_id : str):
-        if exists(path):
-            raise Exception('Path already exists')  
-        
-        makedirs(join(path, 'data'))
-
-        with open(join(path, 'instance.json'), 'w') as f:
-            f.write(dumps({ 'id': str(uuid7()), 'resource': resource_id, 'version': str(uuid7()), 'status': 'open', 'files': {} }, indent=4))
-
-    def status(self) -> str:
-        return self.config['status']
-
-    def _resolve(self, path : str) -> str:
-        return join(self.path, 'data', path)
-
-    def _add(self, path : str, data : BufferedReader, checksum : str = None):
+    def add(self, path : str, data : BufferedReader, checksum : str = None):
         if self.mode != WRITE:
             raise Exception("Adding files only allowed in 'w' mode")
 
@@ -144,11 +125,49 @@ class FileInstance(Instance):
             rename(tmpfile, self._resolve(path))
 
             self.config['files'][path] = { 'path': path, 'size': size, 'checksum': f'md5:{cs.hexdigest()}' }
+
+            self._save()
         except Exception as e:
             if exists(tmpfile):
                 remove(tmpfile)
                 
             raise e
+
+    def serialize(self) -> Iterable[bytes]:
+        raise Exception('Not implemented')
+
+    def finalize(self):
+        if self.config['status'] == FINALIZED:
+            raise Exception('Instance is already finalized')
+
+        self.config['status'] = FINALIZED
+        self._save()
+
+    def create(path : str):
+        path = Path(path)
+        if path.exists():
+            raise Exception('Path already exists')  
+        
+        path.joinpath('data').mkdir(parents=True, exist_ok=True)
+        path.joinpath('instance.json').write_text(
+            dumps(
+                {
+                    'id': str(uuid7()),
+                    'resource': None,
+                    'version': str(uuid7()),
+                    'status': 'open',
+                    'files': {}
+                },
+                indent=4))
+        
+        #print(path.joinpath('instance.json').read_text(), file=stderr)
+        print(f"create instance - {path.joinpath('instance.json')}", file=stderr)
+
+    def status(self) -> str:
+        return self.config['status']
+
+    def _resolve(self, path : Union[str,Path]) -> Path:
+        return self.path.joinpath('data', path)
 
     def _save(self):
         self.config['version'] = str(uuid7())
@@ -165,20 +184,25 @@ class FileInstance(Instance):
 
     def __iter__(self):
         return iter(self.config['files'].keys())
+    
+    def __getitem__(self, path : str):
+        return self.config['files'][path]
 
 
 class FileResource:
-    def __init__(self, path : str, mode : str = 'r'):
-        self.path = path
+    def __init__(self, path : str = None, mode : str = 'r'):
+        self.path = Path(path) if path else Path(gettempdir()).joinpath(str(uuid4()))
         self.mode = mode
 
-        if not exists(self.path) and mode == WRITE:
+        if not self.path.exists() and mode == WRITE:
             FileResource.create(self.path)
 
         self._reload()
 
         if self.mode == WRITE and self.status() == FINALIZED:
             raise Exception('Resource is finalized')
+
+        self.resource_id = self.config['id']
 
     def transaction(self) -> CommitManager:
         self._writable_check()
@@ -191,30 +215,38 @@ class FileResource:
     def update(self, instance : Instance):
         self._writable_check()
 
-        last_instance = self.get_instance(self.config['instances'][-1])
-        if last_instance.status() == OPEN:
-            # open in write-mode merge the instances
-            last_instance = self.get_instance(self.config['instances'][-1], mode=WRITE)
+        if self.last_instance() and self.get_instance(self.last_instance()).status() == OPEN:
+            # open in write-mode to merge the instances
+            last_instance = self.get_instance(self.last_instance(), mode=WRITE)
             last_instance.update(instance)
         else:
             # would shutil.move be nonatomic?
             instance_path = instance.path
             if stat(join(self.path, 'instances')).st_dev != stat(instance_path).st_dev:
-                tmp_target = f'{self.path}/instances/tmp-{str(uuid7())}'
+                tmp_target = self.path.joinpath('instances', 'tmp-{str(uuid7())}')
                 move(instance_path, tmp_target)
                 instance_path = tmp_target
 
+            # inject resource id into instance in a fugly way
+            j = loads(instance_path.joinpath('instance.json').read_text())
+            j['resource'] = self.resource_id
+            instance_path.joinpath('instance.json').write_text(dumps(j, indent=4))
+
             # this operation is atomic
             move(instance_path, join(self.path, 'instances', instance.instance_id))
+
             self.config['instances'].append(instance.instance_id)
 
-        self._save()
+            self._save()
+            self._reload()
 
     def get_instance(self, instance_id : str, mode : str = READ) -> FileInstance:
         instance_path = join(self.path, 'instances', instance_id)
 
         return FileInstance(instance_path, mode=mode)
 
+    def last_instance(self) -> str:
+        return self.config['instances'][-1] if len(self.config['instances']) > 0 else None
 
     def open(self, path, mode=READ) -> BufferedIOBase:
         if mode not in [ READ, READ_BINARY ]:
@@ -229,6 +261,9 @@ class FileResource:
         with self.open(path, mode) as f:
             return f.read()       
 
+    def exists(self, path : str) -> bool:
+        return path in self.files
+
     def create(path : str):
         resource_id = str(uuid7())
 
@@ -237,17 +272,13 @@ class FileResource:
         
         makedirs(join(path, 'instances'))
 
-        instance_id = str(uuid7())
-        instance_path = join(path, 'instances', instance_id)
-        FileInstance.create(instance_path, resource_id)
-
         with open(join(path, 'resource.json'), 'w') as f:
             f.write(
                 dumps(
                     { 'id': resource_id,
                       'version': str(uuid7()),
                       'status': 'open',
-                      'instances': [ instance_id ]
+                      'instances': []
                     }, indent=4))
 
     def finalize(self):
@@ -274,6 +305,11 @@ class FileResource:
         if self.mode != WRITE:
             raise Exception('Resource is in read-only mode')
 
+    def _clear(self):
+        del(self.path)
+        del(self.mode)
+        del(self.config)
+
     def _reload(self):
         with open(join(self.path, 'resource.json'), 'r') as f:
             self.config = load(f)
@@ -297,92 +333,76 @@ class FileResource:
         if path in self.files and self.files[path]:
             return join(self.path, self.files[path])
         
+    def __str__(self):
+        return f"<FileResource({self.resource_id}) @ {self.path}>"
+        
 
 class FileArchive:
-    def __init__(self, path : str = None, mode=READ):
-        path = Path(copy(path))
-
-        if mode not in [ READ, WRITE ]:
-            raise Exception(f"Invalid mode: {mode}")
-
-        if mode == READ and not path.exists():
-            raise Exception(f'Archive ({path}) does not exist')
-
-        if path.is_file():
-            # assume this is a JSON config file
-            self.config = loads(path.read_text())
-            self.root_dir = Path(self.config['root_dir']).absolute()
+    def __init__(self, path : str = None):
+        if path:
+            self.root_dir = Path(path)
+            self.temporary = False
         else:
-            self.root_dir = path
+            self.root_dir = Path(gettempdir()).joinpath(str(uuid4()))
+            self.temporary = True
 
-        if mode == WRITE and not self.root_dir.exists():
-            self.config = {}
+        if not self.root_dir.exists():
+            self.config = { 'mode': 'read-write' }
             self.root_dir.mkdir(parents=True, exist_ok=True)
             self.root_dir.joinpath('config.json').write_text(dumps(self.config, indent=4))
-            self.root_dir.joinpath('instances.txt').write_text('')
-            self.root_dir.joinpath('log.txt').write_text('')
+            self.root_dir.joinpath('resources.txt').write_text('')
+            self.root_dir.joinpath('log.jsonl').write_text('')
         else:
             self.config = loads(self.root_dir.joinpath('config.json').read_text())
 
-        self.logger = EventLogger(self.root_dir.joinpath('log.txt'))
+        self.mode = self.config['mode']
 
-        self.mode = mode
+        self.logger = EventLogger(self.root_dir.joinpath('log.jsonl'))
 
-    def meta(self, instance_id: str) -> dict:
-        return loads(self._resolve(instance_id).joinpath('_meta.json').read_text())
-
-    def get(self, instance_id: str, mode : str = 'r') -> FileInstance:
-        if mode not in [ 'r', 'a' ]:
+    def get(self, resource_id: str, mode : str = READ) -> FileResource:
+        if mode not in [ READ, WRITE ]:
             raise Exception(f"Invalid mode: {mode}")
         
-        if mode != 'r' and self.mode == 'r':
-            raise Exception('Archive is in read-only mode')
+        if mode != READ and self.mode == READ:
+            raise Exception('Archive is not in read-write mode')
 
-        path = self._resolve(instance_id)
+        return FileResource(self._resolve(resource_id), mode=mode)
 
-        return FileInstance(instance_id, path, mode, logger=self.logger)
+    def new(self) -> IngestManager:
+        if self.mode != READ_WRITE:
+            raise Exception('Archive is not in read-write mode')
 
-    def new(self, mode : str = 't') -> FileInstance:
-        if self.mode == 'r':
-            raise Exception('Archive is in read-only mode')
+        tmpdir = Path(gettempdir()).joinpath(str(uuid4()))
 
-        if mode not in [ '1', 't', 'w' ]:
-            raise Exception(f"Invalid mode: {mode}")
+        return IngestManager(self, FileResource(tmpdir, mode=WRITE))
 
-        instance_id = self._new_id()
-        path_segments = split_path(instance_id)
+    def ingest(self, resource : FileResource):
+        if self.mode != READ_WRITE:
+            raise Exception('Archive is not in read-write mode')
 
-        tmp_path = None
-        if mode in [ '1', 't' ]:
-            tmp_path = self.root_dir.joinpath(path_segments[0], 'staging', instance_id)
+        target_dir = self._resolve(resource.resource_id)
+        target_dir.parent.mkdir(parents=True, exist_ok=True)
 
-        path = self.root_dir.joinpath(*path_segments)
+        if target_dir.parent.stat().st_dev != resource.path.stat().st_dev:
+            tmp_dir = self._resolve(resource.resource_id).parent.joinpath(f'tmp-{str(uuid7())}')
+            move(resource.path, tmp_dir)
+            resource.path = tmp_dir
 
-        with self.root_dir.joinpath('instances.txt').open(mode='a') as f:
-            f.write(f"{instance_id}\n")
+        move(resource.path, target_dir)
 
-        return FileInstance(instance_id, path=path, mode=mode, tmp_path=tmp_path, logger=self.logger)
+        with self.root_dir.joinpath('resources.txt').open(mode='a') as f:
+            f.write(f"{resource.resource_id}\n")
+            print('ingest - ' + resource.resource_id, file=stderr)
 
-    def serialize(self, instance_id: str) -> Iterable[bytes]:
+    def serialize(self, resource_id: str) -> Iterable[bytes]:
         raise Exception('Not implemented')
 
     def deserialize(self, data: Union[Instance,bytes,Iterable[bytes]] = None, instance_id: str = None, ):
         raise Exception('Not implemented')
 
-    def commit(self, instance, target_id):
-        target_dir = self._resolve(target_id)
-
-        # can we simply rename/move the directory?
-        if instance.mode in [ 't', '1' ] and not self.exists(target_id):
-            # simply move the staging directory to the target location
-            move(instance.path, self._resolve(target_id))
-        else:
-            # merge the staging directory into the target location
-            raise Exception('Not implemented')
-
     def open(self, instance_id: str, filename : str, mode='r') -> BufferedIOBase:
-        if mode not in [ 'r', 'rb' ]:
-            raise Exception(f"Invalid mode: {mode}")
+        if mode not in [ READ, READ_BINARY ]:
+            raise Exception(f"Invalid mode: '{mode}'")
 
         return self._resolve(instance_id, filename).open(mode)
 
@@ -398,7 +418,7 @@ class FileArchive:
 
     def events(self, start=None, listen=False) -> Iterable:
         # TODO: optimize
-        e = self.root_dir.joinpath("log.txt").read_text().splitlines()
+        e = self.root_dir.joinpath("log.jsonl").read_text().splitlines()
 
         for l in e:
             ts, ref, event = l.split('\t')
@@ -411,12 +431,47 @@ class FileArchive:
     def _new_id(self) -> str:
         return str(uuid7())
 
-    def _resolve(self, instance_id: str, filename: str = None) -> str:
-        return self.root_dir.joinpath(*split_path(instance_id), *(['data', filename] if filename else []))
+    def _resolve(self, resource_id, instance_id: str = None, filename: str = None) -> Path:
+        resource_path = self.root_dir.joinpath(*split_path(resource_id))
+
+        if instance_id is None:
+            if filename is None:
+                return resource_path
+
+            # Ugh. This is an expensive way to get to a single file
+            return self.get(resource_id)._resolve(filename)
+        else:
+            instance_path = resource_path.joinpath('instances', instance_id)
+
+            if filename:
+                file_path = instance_path.joinpath(filename)
+
+                # Quick check if file exists to avoid loading the instance
+                if file_path.exists():
+                    return file_path
+                else:
+                    # Ugh. Last resort since the instance might contain a reference
+                    FileInstance(instance_path)._resolve(filename)
+
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, exc_type, exc_value, traceback):
+        if self.temporary:
+            # Double-check that the root_dir is within the temporary directory
+            # to avoid catastrophic data loss on accidentaly setting the
+            # `self.temporary` flag to `False`. Consider removing the
+            # ContextManager-functionality for FileArchive altogether to avoid
+            # this risk entirely.
+            if gettempdir() in str(self.root_dir):
+                print(f'archive - rmtree({self.root_dir})', file=stderr)
+                #rmtree(self.root_dir)
 
     def __iter__(self):
-        return iter(self.root_dir.joinpath('instances.txt').read_text().splitlines())
+        return iter(self.root_dir.joinpath('resources.txt').read_text().splitlines())
 
-    def __getitem__(self, instance_id: str) -> FileInstance:
-        return self.get(instance_id)
-
+    def __getitem__(self, resource_id: str) -> FileResource:
+        return self.get(resource_id)
+    
+    def __str__(self):
+        return f"<FileArchive @ {self.root_dir }>"

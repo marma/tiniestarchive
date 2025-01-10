@@ -8,6 +8,11 @@ READ = 'r'
 READ_BINARY = 'rb'
 WRITE = 'w'
 
+READ_ONLY = 'read-only'
+READ_WRITE = 'read-write'
+
+# Maybe just remove these helper classes and use the classes from tiniestarchive directly
+
 class Archive:
     def __new__(cls, root=None, **kwargs):
         if root:
@@ -28,7 +33,7 @@ class Instance:
     def __new__(cls, root=None, **kwargs):
         if root:
             if isinstance(root, str) and root.startswith('http'):
-                return super(Resource, tiniestarchive.HttpInstance).__new__(tiniestarchive.HttpInstance)
+                return super(Instance, tiniestarchive.HttpInstance).__new__(tiniestarchive.HttpInstance)
 
         return super(Instance, tiniestarchive.FileInstance).__new__(tiniestarchive.FileInstance)
     
