@@ -11,6 +11,10 @@ WRITE = 'w'
 READ_ONLY = 'read-only'
 READ_WRITE = 'read-write'
 
+DYNAMIC = 'dynamic'
+WORM = 'worm'
+PRESERVATION = 'preservation'
+
 # Maybe just remove these helper classes and use the classes from tiniestarchive directly
 
 class Archive:

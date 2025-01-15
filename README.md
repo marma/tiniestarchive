@@ -12,7 +12,7 @@ Three modes of operation:
 
 - *WORM mode* - a sub-mode of Preservation mode where all files, even the package resource description and administrative files, can only be written once and never updated, deleted or renamed. This puts extra pressure on the disk and compute which lowers performance. This is a problem that should be solved outside of the archive using caching (see `CachedArchive`).
 
-- *Unsafe mode* - in "Unsafe mode" files *can* be changed, deleted and updated.
+- *Dynamic mode* - in "dynamic mode" files *can* be changed, deleted and updated. This is useful for 
 
 Optimally these modes can be combined using `MultiArchive` with one archive in preservation mode and one (or more) in unsafe mode.
 
@@ -63,7 +63,7 @@ A Transaction is simply a temporary Instance used to enable commit/rollback func
 ```
 from tiniestarchive import Archive
 
-archive = Archive('/archive')
+archive = Archive('https://example.org/')
 resource = archive.get('1234-5678-9012')
 m = resource.read('meta.json')
 ```
@@ -75,7 +75,7 @@ m = resource.read('meta.json')
 ```
 from tiniestarchive import Archive
 
-archive = Archive('/archive')
+archive = Archive('https://example.org/')
 with archive.new() as resource:
     with resource.transaction() as transaction:
         transaction.add('meta.json')
@@ -107,6 +107,8 @@ archive = Archive('/archive')
 with archive.new() as resource: 
     with resource.transaction() as transaction:
         transaction.add('meta.json')
+        transaction.add('tags.json')
+        transaction.add('car.png')
 
         raise Exception('Something went wrong')
 ```
@@ -131,7 +133,22 @@ with Archive('https://example.org/') as archive:
         print(event)
 ```
 
-### Usage - 
+### Usage - Writing to multiple archives
+
+Using multiple archives and syncing transactions ensures files are written to both archives or not at all.
+
+```
+from tiniestarchive import Archive
+
+archive = Archive('https://example.org/')
+hsm_archive = Archive('/hsm_data/')
+
+with archive.new() as r1:
+    with hsm_archive.new(resource_id=r1.resource_id) as r2:
+        with r1.transaction() as t1, r2.transaction() as t2:
+            t1.add('largefile.raw')
+            t2.add('downsampled.mp4')
+```
 
 
 ### File structure for `FileResource`

@@ -22,5 +22,5 @@ class IngestManager(object):
                 self.resource._clear()
         finally:
             if resource_path.exists():
-                print(f'resource - rmtree({resource_path})', file=stderr)
+                #print(f'resource - rmtree({resource_path})', file=stderr)
                 rmtree(self.resource.path)

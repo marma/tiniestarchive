@@ -17,7 +17,7 @@ from pathlib import Path
 from time import time
 from .utils import split_path, safe_path
 from enum import Enum
-from . import Archive,Instance,READ,READ_BINARY,WRITE,OPEN,FINALIZED,DELETED,READ_ONLY,READ_WRITE
+from . import Archive,Instance,READ,READ_BINARY,WRITE,OPEN,FINALIZED,DELETED,READ_ONLY,READ_WRITE,DYNAMIC,WORM,PRESERVATION
 
 class EventLogger:
     def __init__(self, filename):
@@ -103,38 +103,42 @@ class FileInstance(Instance):
         self.config['version'] = str(uuid7())
         self._save()
 
-    def add(self, path : str, data : BufferedReader, checksum : str = None):
+    def add(self, path : str, filename : str = None, data : BufferedReader = None, checksum : str = None):
         if self.mode != WRITE:
             raise Exception("Adding files only allowed in 'w' mode")
 
+        if (filename and data) or not (filename or data):
+            raise Exception('Either filename or data must be supplied, but not both')
+
+        if filename:
+            data = open(filename, 'rb')
+
         tmpfile = f'{self._resolve(path)}-tmp-{str(uuid7())}'
 
-        try:
-            if not exists(d := dirname(tmpfile)):
-                makedirs(d)
+        with data or open(filename, 'rb') as d:
+            try:
+                if not exists(d := dirname(tmpfile)):
+                    makedirs(d)
 
-            cs,size = md5(), 0
-            with open(tmpfile, 'wb') as f:
-                while chunk := data.read(1024):
-                    cs.update(chunk)
-                    size += f.write(chunk)
+                cs,size = md5(), 0
+                with open(tmpfile, 'wb') as f:
+                    while chunk := d.read(1024):
+                        cs.update(chunk)
+                        size += f.write(chunk)
 
-            if checksum and checksum.lower() == cs.hexdigest().lower():
-                raise Exception('Checksum mismatch')
+                if checksum and checksum.lower() == cs.hexdigest().lower():
+                    raise Exception('Checksum mismatch')
 
-            rename(tmpfile, self._resolve(path))
+                rename(tmpfile, self._resolve(path))
 
-            self.config['files'][path] = { 'path': path, 'size': size, 'checksum': f'md5:{cs.hexdigest()}' }
+                self.config['files'][path] = { 'path': path, 'size': size, 'checksum': f'md5:{cs.hexdigest()}' }
 
-            self._save()
-        except Exception as e:
-            if exists(tmpfile):
-                remove(tmpfile)
-                
-            raise e
-
-    def serialize(self) -> Iterable[bytes]:
-        raise Exception('Not implemented')
+                self._save()
+            except Exception as e:
+                if exists(tmpfile):
+                    remove(tmpfile)
+                    
+                raise e
 
     def finalize(self):
         if self.config['status'] == FINALIZED:
@@ -161,7 +165,7 @@ class FileInstance(Instance):
                 indent=4))
         
         #print(path.joinpath('instance.json').read_text(), file=stderr)
-        print(f"create instance - {path.joinpath('instance.json')}", file=stderr)
+        #print(f"create instance - {path.joinpath('instance.json')}", file=stderr)
 
     def status(self) -> str:
         return self.config['status']
@@ -188,6 +192,9 @@ class FileInstance(Instance):
     def __getitem__(self, path : str):
         return self.config['files'][path]
 
+    def __str__(self):
+        return f"<FileInstance({self.instance_id}) @ {self.path}>"
+
 
 class FileResource:
     def __init__(self, path : str = None, mode : str = 'r'):
@@ -210,18 +217,25 @@ class FileResource:
         if self.status() == FINALIZED:
             raise Exception('Resource is finalized')
 
-        return CommitManager(self, lambda x: FileInstance(x, mode=WRITE))
+        return CommitManager(
+                    self,
+                    lambda x: FileInstance(x, mode=WRITE),
+                    close=self.archive.operation_mode in [ WORM, PRESERVATION ])
 
     def update(self, instance : Instance):
         self._writable_check()
 
         if self.last_instance() and self.get_instance(self.last_instance()).status() == OPEN:
+            if instance.status() == FINALIZED:
+                raise Exception('Will not merge finalized instance into open instance')
+            
             # open in write-mode to merge the instances
             last_instance = self.get_instance(self.last_instance(), mode=WRITE)
             last_instance.update(instance)
         else:
             # would shutil.move be nonatomic?
             instance_path = instance.path
+
             if stat(join(self.path, 'instances')).st_dev != stat(instance_path).st_dev:
                 tmp_target = self.path.joinpath('instances', 'tmp-{str(uuid7())}')
                 move(instance_path, tmp_target)
@@ -293,6 +307,9 @@ class FileResource:
     def status(self) -> str:
         return self.config['status']
 
+    def serialize(self) -> Iterable[bytes]:
+        ...
+
     def _save(self):
         self.config['version'] = str(uuid7())
         with open(join(self.path, 'resource.json'), 'w') as f:
@@ -338,7 +355,10 @@ class FileResource:
         
 
 class FileArchive:
-    def __init__(self, path : str = None):
+    def __init__(self, path : str = None, operation_mode : str = None):
+        if operation_mode not in [ None, DYNAMIC, WORM, PRESERVATION ]:
+            raise Exception(f"Invalid operation mode: {operation_mode}")
+
         if path:
             self.root_dir = Path(path)
             self.temporary = False
@@ -347,13 +367,16 @@ class FileArchive:
             self.temporary = True
 
         if not self.root_dir.exists():
-            self.config = { 'mode': 'read-write' }
+            self.config = { 'mode': 'read-write', 'operation_mode': PRESERVATION }
             self.root_dir.mkdir(parents=True, exist_ok=True)
             self.root_dir.joinpath('config.json').write_text(dumps(self.config, indent=4))
             self.root_dir.joinpath('resources.txt').write_text('')
             self.root_dir.joinpath('log.jsonl').write_text('')
         else:
             self.config = loads(self.root_dir.joinpath('config.json').read_text())
+
+            if operation_mode and self.operation_mode() != operation_mode:
+                raise Exception(f"Operation mode cannot be changed")
 
         self.mode = self.config['mode']
 
@@ -392,7 +415,7 @@ class FileArchive:
 
         with self.root_dir.joinpath('resources.txt').open(mode='a') as f:
             f.write(f"{resource.resource_id}\n")
-            print('ingest - ' + resource.resource_id, file=stderr)
+            #('ingest - ' + resource.resource_id, file=stderr)
 
     def serialize(self, resource_id: str) -> Iterable[bytes]:
         raise Exception('Not implemented')
@@ -427,6 +450,9 @@ class FileArchive:
                 continue
 
             yield { "timestamp": ts, "ref": ref, "event": event }
+
+    def operation_mode(self) -> str:
+        return self.config['operation_mode']
 
     def _new_id(self) -> str:
         return str(uuid7())
@@ -464,8 +490,8 @@ class FileArchive:
             # ContextManager-functionality for FileArchive altogether to avoid
             # this risk entirely.
             if gettempdir() in str(self.root_dir):
-                print(f'archive - rmtree({self.root_dir})', file=stderr)
-                #rmtree(self.root_dir)
+                #print(f'archive - rmtree({self.root_dir})', file=stderr)
+                rmtree(self.root_dir)
 
     def __iter__(self):
         return iter(self.root_dir.joinpath('resources.txt').read_text().splitlines())
