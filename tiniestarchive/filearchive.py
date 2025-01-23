@@ -359,24 +359,26 @@ class FileArchive:
         if operation_mode not in [ None, DYNAMIC, WORM, PRESERVATION ]:
             raise Exception(f"Invalid operation mode: {operation_mode}")
 
-        if path:
-            self.root_dir = Path(path)
-            self.temporary = False
-        else:
-            self.root_dir = Path(gettempdir()).joinpath(str(uuid4()))
-            self.temporary = True
+        self.temporary = path is None
+        self.root_dir = Path(path if path else gettempdir()).joinpath(str(uuid4()))
+        self.operation_mode = operation_mode or PRESERVATION
 
         if not self.root_dir.exists():
-            self.config = { 'mode': 'read-write', 'operation_mode': PRESERVATION }
-            self.root_dir.mkdir(parents=True, exist_ok=True)
+            self.root_dir.mkdir(parents=True)
+
+        if self.root_dir.joinpath('config.json').exists():
+            self.config = loads(self.root_dir.joinpath('config.json').read_text())
+        elif len(listdir(self.root_dir)) == 0:
+            self.config = { 'mode': 'read-write', 'operation_mode': operation_mode }
             self.root_dir.joinpath('config.json').write_text(dumps(self.config, indent=4))
             self.root_dir.joinpath('resources.txt').write_text('')
             self.root_dir.joinpath('log.jsonl').write_text('')
+            self._save()
         else:
-            self.config = loads(self.root_dir.joinpath('config.json').read_text())
+            raise Exception('Invalid archive')
 
-            if operation_mode and self.operation_mode() != operation_mode:
-                raise Exception(f"Operation mode cannot be changed")
+        if operation_mode and self.operation_mode() != operation_mode:
+            raise Exception(f"Operation mode cannot be changed")
 
         self.mode = self.config['mode']
 

@@ -10,6 +10,7 @@ services:
     volumes:
       - ./app:/app
       - ./tiniestarchive:/app/tiniestarchive
+      - ./tmp_data:/data
     ports:
       - "8080:80"      
 

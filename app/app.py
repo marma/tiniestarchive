@@ -4,8 +4,9 @@ from fastapi.responses import HTMLResponse,RedirectResponse,JSONResponse,FileRes
 from starlette.requests import ClientDisconnect
 from fastapi.templating import Jinja2Templates
 from uuid_utils import uuid7
-from tiniestarchive import Archive
+from tiniestarchive import FileArchive
 from tiniestarchive.utils import split_path,safe_path,save_to_tmp
+from itertools import islice
 
 from typing import List
 from os import getenv,walk,listdir,makedirs
@@ -22,35 +23,37 @@ logging.basicConfig(level=LOG_LEVEL)
 app = FastAPI(root_path=PREFIX)
 static = StaticFiles(directory="static")
 templates = Jinja2Templates(directory="templates")
-archive = Archive(ARCHIVE_DIR, mode='w')
+archive = FileArchive(ARCHIVE_DIR)
 
-def _list_instances():
-    return [ x for x in archive ]
+def _list_resources(max=None):
+    return islice(archive, max)
 
-def _list_files(instance_id):
-    return archive.files(instance_id)
+def _get_resource(resource_id):
+    return archive.get(resource_id)
+
+def _get_json(resource_id):
+    return archive.json(resource_id)
 
 def _events(start=None):
     return [ x for x in archive.events(start=start) ]
 
-def _meta(instance_id):
-    return { **archive.meta(instance_id) }
+@app.post('/_ingest')
+async def ingest():
+    archive.ingest(request.stream())
 
-@app.post('/_newinstance')
-async def new_instance():
     i = archive.new(mode='w')
 
     print(i)
 
     return RedirectResponse(f'/{i.instance_id}/', status_code=status.HTTP_302_FOUND)
 
-@app.get("/_instances", response_class=JSONResponse)
-async def instances():
-    return _list_instances()
+@app.get("/_resources", response_class=JSONResponse)
+async def resources():
+    return _list_resources()
 
 @app.get("/")
 async def get_root(request: Request):
-    return templates.TemplateResponse("index.html", { "request": request, "instances": _list_instances() })
+    return templates.TemplateResponse("index.html", { "request": request, "instances": _list_resources(max=100) })
 
 @app.get("/{instance_id}/{filename}", response_class=FileResponse)
 async def get_file(instance_id: str, filename: str):
