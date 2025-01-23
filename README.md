@@ -2,9 +2,25 @@
 
 ** This is proof-of-concept / experimental software not intended for production use  **
 
-The Tiniest Archive is an attempt at building a minimal digital archive that still support some OAIS fundamentals through the use of package instances and package resources. It does, on purpose, not deal with metadata or any understanding of the content within these instances/resources. The aim is to provide a clear separation between package descriptions / file integrity and information concerning 
+The Tiniest Archive is an attempt at building a minimal digital archive that still support some OAIS fundamentals through the use of package instances and package resources. It does, on purpose, not deal with metadata or any understanding of the content within these instances/resources. The aim is to provide a clear separation between package descriptions / file integrity and information describing the content and/or intent.
 
 ## Design considerations
+
+### Simplicity 
+
+Complexity adds to the probability of failure so important things need to have as few moving parts as possible, i.e things that must not fail should be simple. 
+
+- Few and and atomic operations that either succeed or fail in a very visible manner and can then be rolled back
+- Using the archive as it exists on disk as a single source of truth, i.e no database or index should be used to ensure that operations maintain the integrity of the archive
+
+### Robustness
+
+- Errors/mistakes/bad code on the client side must **never** result in broken packages
+- Catastrophic failures, such as loss of connection to the storage, must result in a state that can be either rolled back or "replayed" at a later stage
+
+### Flexibility
+
+### Modes
 
 Three modes of operation:
 
@@ -14,23 +30,9 @@ Three modes of operation:
 
 - *Dynamic mode* - in "dynamic mode" files *can* be changed, deleted and updated. This is useful for 
 
-Optimally these modes can be combined using `MultiArchive` with one archive in preservation mode and one (or more) in unsafe mode.
-
-### Simplicity 
-
-Complexity adds to the probability of failure so important things need to have as few moving parts as possible, i.e things that must not fail should be simple. 
-
-- Few and and atomic operations that either succeed or fail in a very visible manner and can then be rolled back
-- Using the archive as it exists on disk as a single source of truth, i.e no database or index should be used to ensure that operations maintain the integrity of the archive
+Optimally these modes can be combined using `MultiArchive` with one archive in preservation mode and one (or more) in dynamic mode.
 
 ### Design for operations
-
-### Robustness
-
-- Errors/mistakes/bad code on the client side must **never** result in broken packages
-- Catastrophic failures, such as loss of connection to the storage, must result in a state that can be either rolled back or "replayed" at a later stage
-
-### Flexibility
 
 ### Code base size
 
@@ -85,7 +87,7 @@ with archive.new() as resource:
 
 ### Usage - add file to existing resource 
 
-`archive.get(...)` will, depending on the `mode` parameter, return either a Transaction (for `mode='w'`) or an Resource (for the default `mode='r'`). Take care when using `mode='a'` without a ContextManager, as the Transaction will not be committed automatically, but rather leave a temporary Instance behind.
+`archive.get(...)` will return a Resource that, depending on the `mode` parameter, can create a transaction object for used for adding / updating files. Take care when using `mode='w'` without a ContextManager, as the Transaction will not be committed automatically, but rather leave a temporary Instance behind.
 
 ```
 from tiniestarchive import Archive
@@ -98,7 +100,7 @@ with archive.get('1234-5678-9012', mode='w') as resource:
 
 ### Usage - exception while adding files results in transaction rollback
 
-In this example the file added to the transaction will never added to the resource and the resource will never be added to the archive.
+In this example the file added to the transaction will not be added to the resource, and the resource will not be added to the archive.
 
 ```
 from tiniestarchive import Archive
@@ -146,10 +148,9 @@ hsm_archive = Archive('/hsm_data/')
 with archive.new() as r1:
     with hsm_archive.new(resource_id=r1.resource_id) as r2:
         with r1.transaction() as t1, r2.transaction() as t2:
-            t1.add('largefile.raw')
-            t2.add('downsampled.mp4')
+            t2.add('largefile.raw')
+            t1.add('downsampled.mp4')
 ```
-
 
 ### File structure for `FileResource`
 
