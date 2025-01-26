@@ -1,4 +1,4 @@
-from copy import copy
+from copy import copy, deepcopy
 from hashlib import md5
 from sys import stderr
 from io import BufferedIOBase, BufferedReader
@@ -103,22 +103,18 @@ class FileInstance(Instance):
         self.config['version'] = str(uuid7())
         self._save()
 
-    def add(self, path : str, filename : str = None, data : BufferedReader = None, checksum : str = None):
+    def add(self, filename, path : str = None, data : BufferedReader = None, checksum : str = None):
         if self.mode != WRITE:
             raise Exception("Adding files only allowed in 'w' mode")
 
-        if (filename and data) or not (filename or data):
-            raise Exception('Either filename or data must be supplied, but not both')
+        if not path:
+            path = Path(filename).name
+            
+        tmpfile = Path(f'{self._resolve(path)}-tmp-{str(uuid7())}')
 
-        if filename:
-            data = open(filename, 'rb')
-
-        tmpfile = f'{self._resolve(path)}-tmp-{str(uuid7())}'
-
-        with data or open(filename, 'rb') as d:
+        with (data or open(filename, 'rb')) as d:
             try:
-                if not exists(d := dirname(tmpfile)):
-                    makedirs(d)
+                tmpfile.parent.mkdir(parents=True, exist_ok=True)
 
                 cs,size = md5(), 0
                 with open(tmpfile, 'wb') as f:
@@ -129,10 +125,8 @@ class FileInstance(Instance):
                 if checksum and checksum.lower() == cs.hexdigest().lower():
                     raise Exception('Checksum mismatch')
 
-                rename(tmpfile, self._resolve(path))
-
+                tmpfile.rename(self._resolve(path))
                 self.config['files'][path] = { 'path': path, 'size': size, 'checksum': f'md5:{cs.hexdigest()}' }
-
                 self._save()
             except Exception as e:
                 if exists(tmpfile):
@@ -170,6 +164,9 @@ class FileInstance(Instance):
     def status(self) -> str:
         return self.config['status']
 
+    def json(self) -> dict:
+        return deepcopy(self.config)
+
     def _resolve(self, path : Union[str,Path]) -> Path:
         return self.path.joinpath('data', path)
 
@@ -197,8 +194,9 @@ class FileInstance(Instance):
 
 
 class FileResource:
-    def __init__(self, path : str = None, mode : str = 'r'):
+    def __init__(self, path : str = None, archive = None, mode : str = 'r'):
         self.path = Path(path) if path else Path(gettempdir()).joinpath(str(uuid4()))
+        self.archive = archive
         self.mode = mode
 
         if not self.path.exists() and mode == WRITE:
@@ -211,7 +209,7 @@ class FileResource:
 
         self.resource_id = self.config['id']
 
-    def transaction(self) -> CommitManager:
+    def transaction(self, finalize=False) -> CommitManager:
         self._writable_check()
 
         if self.status() == FINALIZED:
@@ -220,7 +218,7 @@ class FileResource:
         return CommitManager(
                     self,
                     lambda x: FileInstance(x, mode=WRITE),
-                    close=self.archive.operation_mode in [ WORM, PRESERVATION ])
+                    finalize=self.archive.operation_mode in [ WORM, PRESERVATION ] if self.archive else False)
 
     def update(self, instance : Instance):
         self._writable_check()
@@ -360,7 +358,7 @@ class FileArchive:
             raise Exception(f"Invalid operation mode: {operation_mode}")
 
         self.temporary = path is None
-        self.root_dir = Path(path if path else gettempdir()).joinpath(str(uuid4()))
+        self.root_dir = Path(path if path else gettempdir().joinpath(str(uuid4())))
         self.operation_mode = operation_mode or PRESERVATION
 
         if not self.root_dir.exists():
@@ -369,15 +367,14 @@ class FileArchive:
         if self.root_dir.joinpath('config.json').exists():
             self.config = loads(self.root_dir.joinpath('config.json').read_text())
         elif len(listdir(self.root_dir)) == 0:
-            self.config = { 'mode': 'read-write', 'operation_mode': operation_mode }
+            self.config = { 'mode': 'read-write', 'operation_mode': self.operation_mode }
             self.root_dir.joinpath('config.json').write_text(dumps(self.config, indent=4))
             self.root_dir.joinpath('resources.txt').write_text('')
             self.root_dir.joinpath('log.jsonl').write_text('')
-            self._save()
         else:
             raise Exception('Invalid archive')
 
-        if operation_mode and self.operation_mode() != operation_mode:
+        if operation_mode and self.operation_mode != operation_mode:
             raise Exception(f"Operation mode cannot be changed")
 
         self.mode = self.config['mode']
@@ -399,7 +396,7 @@ class FileArchive:
 
         tmpdir = Path(gettempdir()).joinpath(str(uuid4()))
 
-        return IngestManager(self, FileResource(tmpdir, mode=WRITE))
+        return IngestManager(self, FileResource(tmpdir, archive=self, mode=WRITE))
 
     def ingest(self, resource : FileResource):
         if self.mode != READ_WRITE:
@@ -456,6 +453,10 @@ class FileArchive:
     def operation_mode(self) -> str:
         return self.config['operation_mode']
 
+    def json(self, resource_id: str) -> dict:
+        ret = load(self._resolve(resource_id).joinpath('resource.json').read_text())
+        ret.update({ 'instances': { instance_id:load(self._resolve(resource_id, instance_id).joinpath('instance.json')) for instance_id in ret['instances'] } })
+
     def _new_id(self) -> str:
         return str(uuid7())
 
@@ -488,11 +489,11 @@ class FileArchive:
         if self.temporary:
             # Double-check that the root_dir is within the temporary directory
             # to avoid catastrophic data loss on accidentaly setting the
-            # `self.temporary` flag to `False`. Consider removing the
-            # ContextManager-functionality for FileArchive altogether to avoid
-            # this risk entirely.
+            # `self.temporary` flag to `False`.
+            # 
+            # Consider removing the ContextManager-functionality for FileArchive
+            # altogether to avoid this risk entirely.
             if gettempdir() in str(self.root_dir):
-                #print(f'archive - rmtree({self.root_dir})', file=stderr)
                 rmtree(self.root_dir)
 
     def __iter__(self):

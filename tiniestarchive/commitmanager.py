@@ -6,11 +6,11 @@ from tempfile import gettempdir
 from uuid import uuid4
 
 class CommitManager(object):
-    def __init__(self, resource, instance_fun, close, tmpdir : str = None):
+    def __init__(self, resource, instance_fun, finalize, tmpdir : str = None):
         self.instance_fun = instance_fun
         self.tmpdir = tmpdir
         self.resource = resource
-        self.close = close
+        self.finalize = finalize
 
     def __enter__(self):
         if not self.tmpdir:
@@ -23,8 +23,8 @@ class CommitManager(object):
     def __exit__(self, exc_type, exc_value, traceback):
         try:
             if not exc_type:
-                if self.close:
-                    self.instance.close()
+                if self.finalize:
+                    self.instance.finalize()
 
                 self.resource.update(self.instance)
         finally:

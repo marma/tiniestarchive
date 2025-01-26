@@ -10,7 +10,7 @@ The Tiniest Archive is an attempt at building a minimal digital archive that sti
 
 Complexity adds to the probability of failure so important things need to have as few moving parts as possible, i.e things that must not fail should be simple. 
 
-- Few and and atomic operations that either succeed or fail in a very visible manner and can then be rolled back
+- Few and and atomic operations that either succeed or fail in a very visible manner and can then be rolled back. This also means that operations are synchronous and their result is known instantly rather that 
 - Using the archive as it exists on disk as a single source of truth, i.e no database or index should be used to ensure that operations maintain the integrity of the archive
 
 ### Robustness
@@ -90,9 +90,9 @@ with archive.new() as resource:
 `archive.get(...)` will return a Resource that, depending on the `mode` parameter, can create a transaction object for used for adding / updating files. Take care when using `mode='w'` without a ContextManager, as the Transaction will not be committed automatically, but rather leave a temporary Instance behind.
 
 ```
-from tiniestarchive import Archive
+from tiniestarchive import HttpArchive
 
-archive = Archive('/archive')
+archive = HttpArchive('/archive')
 with archive.get('1234-5678-9012', mode='w') as resource:
     with resource.transaction() as transaction:
         resource.add('resource.png')
@@ -103,9 +103,9 @@ with archive.get('1234-5678-9012', mode='w') as resource:
 In this example the file added to the transaction will not be added to the resource, and the resource will not be added to the archive.
 
 ```
-from tiniestarchive import Archive
+from tiniestarchive import FileArchive
 
-archive = Archive('/archive')
+archive = FilArchive('/archive')
 with archive.new() as resource: 
     with resource.transaction() as transaction:
         transaction.add('meta.json')
@@ -118,9 +118,9 @@ with archive.new() as resource:
 ### Usage - iterate over packages
 
 ```
-from tiniestarchive import Archive
+from tiniestarchive import HttpArchive
 
-with Archive('https://example.org/') as archive:
+with HttpArchive('https://example.org/') as archive:
     for instance_id in archive:
         print(instance_id)
 ```
@@ -128,9 +128,9 @@ with Archive('https://example.org/') as archive:
 ### Usage - iterate over events
 
 ```
-from tiniestarchive import Archive
+from tiniestarchive import HttpArchive
 
-with Archive('https://example.org/') as archive:
+with HttpArchive('https://example.org/') as archive:
     for event in archive.events(start='2021-12-01T12:00:00Z'):
         print(event)
 ```
@@ -140,10 +140,10 @@ with Archive('https://example.org/') as archive:
 Using multiple archives and syncing transactions ensures files are written to both archives or not at all.
 
 ```
-from tiniestarchive import Archive
+from tiniestarchive import FileArchive,HttpArchive
 
-archive = Archive('https://example.org/')
-hsm_archive = Archive('/hsm_data/')
+archive = HttpArchive('https://example.org/')
+hsm_archive = FileArchive('/hsm_data/')
 
 with archive.new() as r1:
     with hsm_archive.new(resource_id=r1.resource_id) as r2:

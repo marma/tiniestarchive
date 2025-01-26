@@ -1,0 +1,16 @@
+#version: "3.5"
+
+services:
+  archive:
+    build:
+      context: .
+    environment:
+      - DATA_DIR=/data
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./app:/app
+      - ./tiniestarchive:/app/tiniestarchive
+      - ./tmp_data:/data
+    ports:
+      - "8080:80"      
+
