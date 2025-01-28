@@ -34,8 +34,41 @@ def _get_resource(resource_id):
 def _get_json(resource_id):
     return archive.json(resource_id)
 
-def _events(start=None):
-    return [ x for x in archive.events(start=start) ]
+def _events(start=None, max=None):
+    return islice(archive.events(start=start), max)
+
+@app.get("/{resource_id}/_json", response_class=JSONResponse)
+async def json(resource_id: str):
+    try:
+        return _get_json(resource_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Resource not found')
+    except:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail='Error reading resource')
+
+@app.get("/{resource_id}/{filename}", response_class=FileResponse)
+async def get_file(resource_id: str, filename: str):
+    if resource_id not in archive:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='File not found')
+
+    return FileResponse(archive._resolve(resource_id, filename))
+
+
+@app.get("/{resource_id}/", response_class=HTMLResponse)
+async def json(resource_id: str, request : Request):
+    if resource_id not in archive:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Resource not found')
+
+    if request.headers.get('Accept') == 'application/json':
+        return _get_json(resource_id)
+
+    return templates.TemplateResponse(
+                "resource.html",
+                {
+                    "request": request,
+                    "resource_id": resource_id,
+                    "resource": _get_json(resource_id),
+                })
 
 @app.post('/_ingest')
 async def ingest():

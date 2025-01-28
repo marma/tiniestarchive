@@ -90,7 +90,7 @@ class FileInstance(Instance):
                 target = self._resolve(path)
 
                 # will shutil.move be nonatomic?
-                if stat(source).st_dev != stat(target).st_dev:
+                if stat(source).st_dev != stat(target.parent).st_dev:
                     tmp_target = f'{target}-tmp-{str(uuid7())}'
                     move(source, tmp_target)
                     source = tmp_target
@@ -126,7 +126,7 @@ class FileInstance(Instance):
                     raise Exception('Checksum mismatch')
 
                 tmpfile.rename(self._resolve(path))
-                self.config['files'][path] = { 'path': path, 'size': size, 'checksum': f'md5:{cs.hexdigest()}' }
+                self.config['files'][path] = { 'id': str(uuid7()), 'path': path, 'size': size, 'checksum': f'md5:{cs.hexdigest()}' }
                 self._save()
             except Exception as e:
                 if exists(tmpfile):
@@ -158,9 +158,6 @@ class FileInstance(Instance):
                 },
                 indent=4))
         
-        #print(path.joinpath('instance.json').read_text(), file=stderr)
-        #print(f"create instance - {path.joinpath('instance.json')}", file=stderr)
-
     def status(self) -> str:
         return self.config['status']
 
@@ -308,6 +305,13 @@ class FileResource:
     def serialize(self) -> Iterable[bytes]:
         ...
 
+    def json(self) -> dict:
+        ret = loads(self.path.joinpath('resource.json').read_text())
+        ret.update({ 'instances': { instance_id:loads(self.path.joinpath('instances', instance_id, 'instance.json').read_text()) for instance_id in ret['instances'] } })
+        ret['files'] = deepcopy(self.files)
+
+        return ret
+
     def _save(self):
         self.config['version'] = str(uuid7())
         with open(join(self.path, 'resource.json'), 'w') as f:
@@ -337,20 +341,30 @@ class FileResource:
 
             self.files.update(
                 {
-                  x['path']:(join('instances', instance_id, x['path']) if x.get('status', None) != DELETED else None)
+                  x['path']:(join('instances', instance_id, 'data', x['path']) if x.get('status', None) != DELETED else None)
                   for x in j['files'].values()
-                  if x.get('status', None) != DELETED
                 })
             
-            self.checksums.update({ x['checksum']:x['path'] for x in j['files'].values() })
+            self.checksums.update({ x['checksum']:x['path'] for x in j['files'].values() if x.get('checksum', None) })
 
-    def _resolve(self, path : str) -> str:
-        if path in self.files and self.files[path]:
-            return join(self.path, self.files[path])
+        self.files = { k:v for k,v in self.files.items() if v }
+
+    def _resolve(self, path : str, instance_id : str = None) -> Path:
+        if instance_id:
+            return self.path.joinpath('instances', instance_id, 'data', path)
+        
+        return join(self.path, self.files[path])
         
     def __str__(self):
         return f"<FileResource({self.resource_id}) @ {self.path}>"
-        
+    
+    def __enter__(self):
+        # TODO: lock resource if in write mode
+        return self
+    
+    def __exit__(self, exc_type, exc_value, traceback):
+        # TODO release lock if in write mode
+        ...
 
 class FileArchive:
     def __init__(self, path : str = None, operation_mode : str = None):
@@ -358,7 +372,7 @@ class FileArchive:
             raise Exception(f"Invalid operation mode: {operation_mode}")
 
         self.temporary = path is None
-        self.root_dir = Path(path if path else gettempdir().joinpath(str(uuid4())))
+        self.root_dir = Path(path if path else gettempdir().joinpath(str(uuid4()))).absolute()
         self.operation_mode = operation_mode or PRESERVATION
 
         if not self.root_dir.exists():
@@ -388,7 +402,7 @@ class FileArchive:
         if mode != READ and self.mode == READ:
             raise Exception('Archive is not in read-write mode')
 
-        return FileResource(self._resolve(resource_id), mode=mode)
+        return FileResource(self._resolve(resource_id), archive=self, mode=mode)
 
     def new(self) -> IngestManager:
         if self.mode != READ_WRITE:
@@ -422,21 +436,18 @@ class FileArchive:
     def deserialize(self, data: Union[Instance,bytes,Iterable[bytes]] = None, instance_id: str = None, ):
         raise Exception('Not implemented')
 
-    def open(self, instance_id: str, filename : str, mode='r') -> BufferedIOBase:
+    def open(self, resource_id: str, filename : str, instance_id : str = None, mode='r') -> BufferedIOBase:
         if mode not in [ READ, READ_BINARY ]:
             raise Exception(f"Invalid mode: '{mode}'")
 
-        return self._resolve(instance_id, filename).open(mode)
+        return self._resolve(resource_id, instance_id = instance_id, filename = filename).open(mode)
 
-    def read(self, instance_id: str, filename : str, mode='r') -> Union[str,bytes]:
-        with self.open(instance_id, filename, mode=mode) as f:
+    def read(self, resource_id: str, filename : str, mode='r') -> Union[str,bytes]:
+        with self.open(resource_id, filename, mode=mode) as f:
             return f.read()
 
-    def files(self, instance_id : str) -> list[str]:
-        return self.config['files'].keys()
-
-    def exists(self, instance_id : str) -> bool:
-        return self._resolve(instance_id).exists()
+    def exists(self, resource_id : str) -> bool:
+        return self._resolve(resource_id).exists()
 
     def events(self, start=None, listen=False) -> Iterable:
         # TODO: optimize
@@ -450,25 +461,20 @@ class FileArchive:
 
             yield { "timestamp": ts, "ref": ref, "event": event }
 
-    def operation_mode(self) -> str:
-        return self.config['operation_mode']
+    #def operation_mode(self) -> str:
+    #    return self.config['operation_mode']
 
     def json(self, resource_id: str) -> dict:
-        ret = load(self._resolve(resource_id).joinpath('resource.json').read_text())
-        ret.update({ 'instances': { instance_id:load(self._resolve(resource_id, instance_id).joinpath('instance.json')) for instance_id in ret['instances'] } })
+        return self.get(resource_id).json()
 
     def _new_id(self) -> str:
         return str(uuid7())
 
-    def _resolve(self, resource_id, instance_id: str = None, filename: str = None) -> Path:
+    def _resolve(self, resource_id, filename : str = None, instance_id: str = None) -> Path:
         resource_path = self.root_dir.joinpath(*split_path(resource_id))
 
         if instance_id is None:
-            if filename is None:
-                return resource_path
-
-            # Ugh. This is an expensive way to get to a single file
-            return self.get(resource_id)._resolve(filename)
+            return self.get(resource_id)._resolve(filename) if filename else resource_path
         else:
             instance_path = resource_path.joinpath('instances', instance_id)
 
@@ -480,21 +486,22 @@ class FileArchive:
                     return file_path
                 else:
                     # Ugh. Last resort since the instance might contain a reference
-                    FileInstance(instance_path)._resolve(filename)
+                    return FileInstance(instance_path)._resolve(filename)
+
+            return instance_path
 
     def __enter__(self):
         return self
     
     def __exit__(self, exc_type, exc_value, traceback):
-        if self.temporary:
-            # Double-check that the root_dir is within the temporary directory
-            # to avoid catastrophic data loss on accidentaly setting the
-            # `self.temporary` flag to `False`.
-            # 
-            # Consider removing the ContextManager-functionality for FileArchive
-            # altogether to avoid this risk entirely.
-            if gettempdir() in str(self.root_dir):
-                rmtree(self.root_dir)
+        # Double-check that the root_dir is within the temporary directory
+        # to avoid catastrophic data loss on accidentaly setting the
+        # `self.temporary` flag to `False`.
+        # 
+        # Consider removing the ContextManager-functionality for FileArchive
+        # altogether to avoid this risk entirely.
+        if self.temporary and gettempdir() in str(self.root_dir):
+            rmtree(self.root_dir)
 
     def __iter__(self):
         return iter(self.root_dir.joinpath('resources.txt').read_text().splitlines())
