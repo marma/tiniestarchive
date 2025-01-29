@@ -60,7 +60,7 @@ class HttpResource(Resource):
                 headers=headers,
                 stream=stream)
 
-    def _post(self, url, params={}, headers={}, files=None, data=data, stream=False):
+    def _post(self, url, params={}, headers={}, files=None, data=None, stream=False):
         return self.session.post(
                 url,
                 auth=self.auth, 

@@ -197,9 +197,9 @@ class FileInstance(Instance):
 
 
 class FileResource:
-    def __init__(self, path : str = None, archive = None, mode : str = 'r'):
+    def __init__(self, path : str = None, close_transactions = True, mode : str = 'r'):
         self.path = Path(path) if path else Path(gettempdir()).joinpath(str(uuid4()))
-        self.archive = archive
+        self.close_transactions = close_transactions
         self.mode = mode
 
         if not self.path.exists() and mode == WRITE:
@@ -221,7 +221,7 @@ class FileResource:
         return CommitManager(
                     self,
                     lambda x: FileInstance(x, mode=WRITE),
-                    finalize=self.archive.operation_mode in [ WORM, PRESERVATION ] if self.archive else False)
+                    finalize=self.close_transactions)
 
     def update(self, instance : Instance):
         self._writable_check()
@@ -416,7 +416,12 @@ class FileArchive:
 
         tmpdir = Path(gettempdir()).joinpath(str(uuid4()))
 
-        return IngestManager(self, FileResource(tmpdir, archive=self, mode=WRITE))
+        return IngestManager(
+                self,
+                FileResource(
+                    tmpdir,
+                    close_transactions=self.operation_mode in [ PRESERVATION, WORM ],
+                    mode=WRITE))
 
     def ingest(self, resource : FileResource):
         if self.mode != READ_WRITE:
