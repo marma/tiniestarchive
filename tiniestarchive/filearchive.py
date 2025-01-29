@@ -427,13 +427,17 @@ class FileArchive:
         move(resource.path, target_dir)
 
         with self.root_dir.joinpath('resources.txt').open(mode='a') as f:
+            # TODO: lock file
             f.write(f"{resource.resource_id}\n")
-            #('ingest - ' + resource.resource_id, file=stderr)
+
+    def update(self, resource_id : str, instance : Instance):
+        with self.get(resource_id, mode='w') as r:
+            r.update(instance)
 
     def serialize(self, resource_id: str) -> Iterable[bytes]:
         raise Exception('Not implemented')
 
-    def deserialize(self, data: Union[Instance,bytes,Iterable[bytes]] = None, instance_id: str = None, ):
+    def deserialize(self, data: Union[Instance,bytes,Iterable[bytes]] = None, instance_id: str = None):
         raise Exception('Not implemented')
 
     def open(self, resource_id: str, filename : str, instance_id : str = None, mode='r') -> BufferedIOBase:

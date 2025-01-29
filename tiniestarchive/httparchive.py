@@ -15,9 +15,11 @@ class HttpResource(Resource):
         self.mode = mode
         self.session = Session()
 
-    def serialize(self) -> RawIOBase:
+    def serialize(self) -> BufferedIOBase:
+        r = self._get(self.root_url, stream=True)
+        r.raw.decode_stream = True
 
-        raise Exception('Not implemented')
+        return r.raw
 
     def open(self, path, mode=READ) -> BufferedIOBase:
         if mode not in [ 'r', 'rb' ]:
