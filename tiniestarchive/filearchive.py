@@ -164,6 +164,12 @@ class FileInstance(Instance):
     def json(self) -> dict:
         return deepcopy(self.config)
 
+    def serialize(self) -> BytesIO:
+        raise Exception('Not implemented')
+    
+    def deserialize(s : BytesIO):
+        raise Exception('Not implemented')
+
     def _resolve(self, path : Union[str,Path]) -> Path:
         return self.path.joinpath('data', path)
 
@@ -303,7 +309,7 @@ class FileResource:
         return self.config['status']
 
     def serialize(self) -> BytesIO:
-        ...
+        raise Exception('Not implemented')
 
     def json(self) -> dict:
         ret = loads(self.path.joinpath('resource.json').read_text())
@@ -430,30 +436,13 @@ class FileArchive:
             # TODO: lock file
             f.write(f"{resource.resource_id}\n")
 
-    def update(self, resource_id : str, instance : Instance):
-        with self.get(resource_id, mode='w') as r:
-            r.update(instance)
-
     def serialize(self, resource_id: str) -> Iterable[bytes]:
         raise Exception('Not implemented')
-
-    def deserialize(self, data: Union[Instance,bytes,Iterable[bytes]] = None, instance_id: str = None):
-        raise Exception('Not implemented')
-
-    def open(self, resource_id: str, filename : str, instance_id : str = None, mode='r') -> BufferedIOBase:
-        if mode not in [ READ, READ_BINARY ]:
-            raise Exception(f"Invalid mode: '{mode}'")
-
-        return self._resolve(resource_id, instance_id = instance_id, filename = filename).open(mode)
-
-    def read(self, resource_id: str, filename : str, mode='r') -> Union[str,bytes]:
-        with self.open(resource_id, filename, mode=mode) as f:
-            return f.read()
 
     def exists(self, resource_id : str) -> bool:
         return self._resolve(resource_id).exists()
 
-    def events(self, start=None, listen=False) -> Iterable:
+    def events(self, start=None) -> Iterable:
         # TODO: optimize
         e = self.root_dir.joinpath("log.jsonl").read_text().splitlines()
 

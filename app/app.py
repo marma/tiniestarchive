@@ -40,10 +40,11 @@ async def add(resource_id : UUID, files: List[UploadFile]):
 
     return "OK"
 
-@app.post("/{resource_id}/_merge")
+@app.post("/{resource_id}/_update")
 async def ingest(resource_id : UUID, file: UploadFile):
     with FileInstance.deserialize(file.file) as instance:
-        archive.update(resource_id, instance)
+        with archive.get(resource_id, mode='w') as r:
+            r.update(instance)
 
     return "OK"
 
@@ -57,6 +58,13 @@ async def stream(resource_id : UUID):
     return StreamingResponse(
             i(),
             media_type='application/tar')
+
+@app.post("/_ingest")
+async def ingest(resource_id : UUID, file: UploadFile):
+    with FileResource.deserialize(file.file) as resource:
+        archive.ingest(resource)
+
+    return "OK"
 
 @app.get("/_resources", response_class=PlainTextResponse)
 async def resources(request: Request):

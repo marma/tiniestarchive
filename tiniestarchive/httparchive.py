@@ -5,7 +5,7 @@ from urllib.parse import urljoin
 from uuid import UUID
 from requests import Session
 
-from tiniestarchive import Archive,Instance,Resource,FileInstance,PRESERVATION, WORM, READ, WRITE
+from tiniestarchive import Archive,Instance,Resource,FileInstance,PRESERVATION, WORM, READ, WRITE, READ_BINARY
 from tiniestarchive.commitmanager import CommitManager
 from tiniestarchive.utils import chunker
 
@@ -78,14 +78,24 @@ class HttpArchive(Archive):
     def __init__(self, url):
         self.root_url = url
 
-    def new(self, mode : str = 't') -> HttpResource:
+    def new(self) -> HttpResource:
         raise Exception('Not implemented')
     
-    def open(self, resource_id: UUID, filename : str, mode=READ) -> BufferedIOBase:
-        ...
+    def serialize(self, resource_id: str) -> BytesIO:
+        raise Exception('Not implemented')
 
-    def read(self, resource_id: str, filename : str, mode=READ) -> Union[str,bytes]:
-        ...
+    def open(self, resource_id: str, filename : str, instance_id : str = None, mode='r') -> BufferedIOBase:
+        if mode not in [ READ, READ_BINARY ]:
+            raise Exception(f"Invalid mode: '{mode}'")
+
+        return self._resolve(resource_id, instance_id = instance_id, filename = filename).open(mode)
+
+    def read(self, resource_id: str, filename : str, mode='r') -> Union[str,bytes]:
+        with self.open(resource_id, filename, mode=mode) as f:
+            return f.read()
+
+    def exists(self, resource_id : str) -> bool:
+        return self._resolve(resource_id).exists()
 
     def events(self, start=None, listen=False) -> Iterable:
         ...
