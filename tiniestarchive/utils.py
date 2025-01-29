@@ -56,3 +56,7 @@ async def save_to_tmp(instance_id, tmpdir, request):
 
     return filenames, { key:('sha256:' + value.value) for key,value in checksums.items() }
 
+def chunker(stream, chunk_size=100*1024):
+    while b := stream.read(chunk_size):
+        yield b
+

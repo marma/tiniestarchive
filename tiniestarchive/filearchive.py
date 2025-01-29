@@ -1,7 +1,7 @@
 from copy import copy, deepcopy
 from hashlib import md5
 from sys import stderr
-from io import BufferedIOBase, BufferedReader
+from io import BufferedIOBase, BufferedReader, BytesIO
 from json import dumps, load, loads
 from os import makedirs, listdir, remove, rename, stat
 from os.path import join,exists
@@ -302,7 +302,7 @@ class FileResource:
     def status(self) -> str:
         return self.config['status']
 
-    def serialize(self) -> Iterable[bytes]:
+    def serialize(self) -> BytesIO:
         ...
 
     def json(self) -> dict:

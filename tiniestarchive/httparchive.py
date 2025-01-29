@@ -1,5 +1,5 @@
 from json import loads
-from io import BufferedIOBase
+from io import BufferedIOBase, BytesIO
 from typing import Iterable, Union
 from urllib.parse import urljoin
 from uuid import UUID
@@ -7,16 +7,18 @@ from requests import Session
 
 from tiniestarchive import Archive,Instance,Resource,FileInstance,PRESERVATION, WORM, READ, WRITE
 from tiniestarchive.commitmanager import CommitManager
+from tiniestarchive.utils import chunker
 
 class HttpResource(Resource):
-    def __init__(self, url, auth = None, mode=READ):
+    def __init__(self, url, archive=None, auth = None, mode=READ):
         self.root_url = url
+        self.archive = archive
         self.auth = auth
         self.mode = mode
         self.session = Session()
 
-    def serialize(self) -> BufferedIOBase:
-        r = self._get(self.root_url, stream=True)
+    def serialize(self) -> BytesIO:
+        r = self._get(urljoin(self.root_url, '_serialize'), stream=True)
         r.raw.decode_stream = True
 
         return r.raw
@@ -32,12 +34,15 @@ class HttpResource(Resource):
         return r.raw
 
     def read(self, path, mode='r') -> Union[str, bytes]:
-        return self.open(path).read()
+        return self.open(path, mode=mode).read()
 
     def update(self, instance : Instance):
-        # TODO deserialize instance instead of just POSTing the data directory
         files = { f: instance.open(f) for f in instance }
         r = self._post(urljoin(self.root_url, '_add'), files=files)
+
+    # TODO serialize instance instead of just POSTing the data directory
+    #def update(self, instance : Instance):
+    #    self._post(urljoin(self.root_url, '_update'), data=chunker(instance.serialize()))
 
     def transaction(self):
         return CommitManager(
@@ -55,13 +60,14 @@ class HttpResource(Resource):
                 headers=headers,
                 stream=stream)
 
-    def _post(self, url, params={}, headers={}, files=None, stream=False):
-        return self.session.get(
+    def _post(self, url, params={}, headers={}, files=None, data=data, stream=False):
+        return self.session.post(
                 url,
                 auth=self.auth, 
                 params=params,
                 headers=headers,
                 files=files,
+                data=data,
                 stream=stream)
 
     def __repr__(self):

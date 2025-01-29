@@ -19,6 +19,10 @@ logging.basicConfig(level=LOG_LEVEL)
 app = FastAPI(root_path=PREFIX)
 archive = FileArchive(ARCHIVE_DIR)
 
+@app.get("/")
+async def root():
+    return archive.config
+
 @app.get("/{resource_id}/", response_class=JSONResponse)
 async def get_resource(resource_id : UUID):
     return archive.get(resource_id).json()
@@ -41,16 +45,17 @@ async def ingest(resource_id : UUID, file: UploadFile):
     with FileInstance.deserialize(file.file) as instance:
         archive.update(resource_id, instance)
 
+    return "OK"
+
 @app.get("{resource_id}/_serialize", response_class=StreamingResponse)
 async def stream(resource_id : UUID):
-    def i(resource_id):
-        r = archive.get(resource_id)
-        with r.serialize() as s:
+    def i():
+        with archive.get(resource_id).serialize() as s:
             while b := s.read(100*1024):
                 yield b
 
     return StreamingResponse(
-            i(resource_id),
+            i(),
             media_type='application/tar')
 
 @app.get("/_resources", response_class=PlainTextResponse)
