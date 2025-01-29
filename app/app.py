@@ -38,13 +38,19 @@ async def add(resource_id : UUID, files: List[UploadFile]):
 
 @app.post("/{resource_id}/_merge")
 async def ingest(resource_id : UUID, file: UploadFile):
-    with FileInstance.deserialize(file.stream) as instance:
+    with FileInstance.deserialize(file.file) as instance:
         archive.update(resource_id, instance)
 
 @app.get("{resource_id}/_serialize", response_class=StreamingResponse)
 async def stream(resource_id : UUID):
+    def i(resource_id):
+        r = archive.get(resource_id)
+        with r.serialize() as s:
+            while b := s.read(100*1024):
+                yield b
+
     return StreamingResponse(
-            archive.serialize(resource_id),
+            i(resource_id),
             media_type='application/tar')
 
 @app.get("/_resources", response_class=PlainTextResponse)
