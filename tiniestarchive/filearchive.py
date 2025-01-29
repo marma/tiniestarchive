@@ -408,7 +408,7 @@ class FileArchive:
         if mode != READ and self.mode == READ:
             raise Exception('Archive is not in read-write mode')
 
-        return FileResource(self._resolve(resource_id), archive=self, mode=mode)
+        return FileResource(self._resolve(resource_id), close_transactions=self.operation_mode in [ PRESERVATION, WORM ], mode=mode)
 
     def new(self) -> IngestManager:
         if self.mode != READ_WRITE:
