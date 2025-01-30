@@ -172,7 +172,7 @@ class FileInstance(Instance):
     def json(self) -> dict:
         return deepcopy(self.config)
 
-    def serialize(self, as_iter=False, buffer_size=10*1024) -> Union[BytesIO,Iterable[bytes]]:
+    def serialize(self, as_iter=False, buffer_size=1024) -> Union[BytesIO,Iterable[bytes]]:
         def i():
             cmd = f'/usr/bin/tar -cf - -C {self.path.parent.absolute()} {self.path.name}'
             p = Popen(split(cmd), stdout=PIPE, stderr=DEVNULL)
@@ -187,6 +187,8 @@ class FileInstance(Instance):
         tmpdir.mkdir()
         t = tarfile.open(fileobj=s, mode='r|')
         t.extractall(path=tmpdir)
+
+        print(tmpdir, file=stderr)
 
         # find instance directory
         if len(listdir(tmpdir)) != 1:
@@ -224,17 +226,29 @@ class FileInstance(Instance):
         return f"<FileInstance({self.instance_id}) @ {self.path}>"
     
     def __del__(self):
-        if self.temporary and (gettempdir() in str(self.path)):
-            rmtree(self.path)
+        if self.temporary:
+            try:
+                if (gettempdir() in str(self.path)):
+                    #print("DELETED!", file=stderr) 
+                    rmtree(self.path)
+            except:
+                # Ignore since gettempdir() fails when python is exiting
+                pass
 
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, exc_type, exc_value, traceback):
+        ...
 
 class FileResource:
-    def __init__(self, path : str = None, close_transactions = True, mode : str = 'r'):
+    def __init__(self, path : str = None, close_transactions = True, mode : str = None, force_temporary=True):
         self.path = Path(path) if path else Path(gettempdir()).joinpath(str(uuid4()))
+        self.force_temporary = force_temporary
         self.close_transactions = close_transactions
-        self.mode = mode
+        self.mode = (mode or READ) if path and not force_temporary else WRITE
 
-        if not self.path.exists() and mode == WRITE:
+        if not self.path.exists() and self.mode == WRITE:
             FileResource.create(self.path)
 
         self._reload()
@@ -252,14 +266,13 @@ class FileResource:
     def update(self, instance : Instance):
         self._writable_check()
 
-        if self.last_instance() and self.get_instance(self.last_instance()).status() == OPEN:
-            if instance.status() == FINALIZED:
-                raise Exception('Will not merge finalized instance into open instance')
-            
+        if not self.close_transactions and self.last_instance() and self.get_instance(self.last_instance()).status() == OPEN:
             # open in write-mode to merge the instances
             last_instance = self.get_instance(self.last_instance(), mode=WRITE)
             last_instance.update(instance)
         else:
+            instance.finalize()
+
             # would shutil.move be nonatomic?
             instance_path = instance.path
 
@@ -333,6 +346,22 @@ class FileResource:
             
         return i(buffer_size) if as_iter else iopen(i(buffer_size))
 
+    def deserialize(s : BytesIO):
+        tmpdir = Path(gettempdir()).joinpath(str(uuid4()))
+        tmpdir.mkdir()
+        t = tarfile.open(fileobj=s, mode='r|')
+        t.extractall(path=tmpdir)
+
+        # find instance directory
+        if len(listdir(tmpdir)) != 1:
+            raise Exception('Invalid tarball')
+        else:
+            instance_id = listdir(tmpdir)[0]
+            move(tmpdir.joinpath(instance_id), Path(gettempdir()).joinpath(instance_id))
+            rmtree(tmpdir)
+
+            return FileResource(Path(gettempdir()).joinpath(instance_id), force_temporary=True)
+
     def json(self) -> dict:
         ret = loads(self.path.joinpath('resource.json').read_text())
         ret.update({ 'instances': { instance_id:loads(self.path.joinpath('instances', instance_id, 'instance.json').read_text()) for instance_id in ret['instances'] } })
@@ -393,6 +422,15 @@ class FileResource:
     def __exit__(self, exc_type, exc_value, traceback):
         # TODO release lock if in write mode
         ...
+
+    def __del__(self):
+        if self.force_temporary:
+            try:
+                if gettempdir() in str(self.path):
+                    rmtree(self.path, ignore_errors=True)
+            except:
+                # Ignore since gettempdir() fails when python is exiting
+                pass
 
 class FileArchive:
     def __init__(self, path : str = None, operation_mode : str = None):

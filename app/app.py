@@ -39,8 +39,8 @@ async def add(resource_id : UUID, files: List[UploadFile]):
 @app.post("/{resource_id}/_update")
 async def ingest(resource_id : UUID, file: UploadFile):
     with FileInstance.deserialize(file.file) as instance:
-        with archive.get(resource_id, mode='w') as r:
-            r.update(instance)
+            with archive.get(str(resource_id), mode='w') as r:
+                r.update(instance)
 
     return "OK"
 

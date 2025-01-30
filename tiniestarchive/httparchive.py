@@ -39,13 +39,17 @@ class HttpResource(Resource):
     def read(self, path, mode='r') -> Union[str, bytes]:
         return self.open(path, mode=mode).read()
 
-    def update(self, instance : Instance):
-        files = { f: instance.open(f) for f in instance }
-        r = self._post(urljoin(self.url, '_add'), files=files)
-
-    # TODO serialize instance instead of just POSTing the data directory
     #def update(self, instance : Instance):
-    #    self._post(urljoin(self.url, '_update'), data=chunker(instance.serialize()))
+    #    files = { f: instance.open(f) for f in instance }
+    #    r = self._post(urljoin(self.url, '_add'), files=files)
+
+    def update(self, instance : Instance):
+        r = self._post(
+            urljoin(self.url, '_update'),
+            files = { 'file': instance.serialize() })
+        
+        if r.status_code != 200:
+            raise Exception(f"Failed to update resource: {r.status_code}: {r.text}")
 
     def transaction(self):
         return CommitManager(
