@@ -1,6 +1,6 @@
-import streaming_form_data
-from streaming_form_data import StreamingFormDataParser
-from streaming_form_data.targets import FileTarget, ValueTarget, SHA256Target
+#import streaming_form_data
+#from streaming_form_data import StreamingFormDataParser
+#from streaming_form_data.targets import FileTarget, ValueTarget, SHA256Target
 from itertools import count
 from os import makedirs
 from os.path import exists, join, dirname

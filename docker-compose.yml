@@ -7,6 +7,7 @@ services:
     environment:
       - DATA_DIR=/data
       - LOG_LEVEL=INFO
+      - TAR=/usr/bin/tar
     volumes:
       - ./app:/app
       - ./tiniestarchive:/app/tiniestarchive

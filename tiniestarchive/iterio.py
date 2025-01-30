@@ -1,3 +1,5 @@
+# Origin: https://github.com/marma/starch/blob/master/starch/iterio.py
+
 from io import RawIOBase,UnsupportedOperation,BufferedReader,TextIOWrapper,DEFAULT_BUFFER_SIZE
 from sys import stderr
 

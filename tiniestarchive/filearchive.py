@@ -1,5 +1,8 @@
 from copy import copy, deepcopy
 from hashlib import md5
+from queue import Queue
+from shlex import split
+from subprocess import DEVNULL, PIPE, Popen, run
 from sys import stderr
 from io import BufferedIOBase, BufferedReader, BytesIO
 from json import dumps, load, loads
@@ -7,7 +10,9 @@ from os import makedirs, listdir, remove, rename, stat
 from os.path import join,exists
 from posixpath import dirname
 from shutil import move,copy, rmtree
+import tarfile
 from tempfile import gettempdir
+from threading import Thread
 from typing import Iterable, Union
 from .commitmanager import CommitManager
 from .ingestmanager import IngestManager
@@ -18,6 +23,8 @@ from time import time
 from .utils import split_path, safe_path
 from enum import Enum
 from . import Archive,Instance,READ,READ_BINARY,WRITE,OPEN,FINALIZED,DELETED,READ_ONLY,READ_WRITE,DYNAMIC,WORM,PRESERVATION
+from .queueio import open as qopen
+from .iterio import open as iopen
 
 class EventLogger:
     def __init__(self, filename):
@@ -33,14 +40,15 @@ class EventLogger:
             f.write(dumps(x))
 
 class FileInstance(Instance):
-    def __init__(self, path : str, mode : str = READ):
-        self.path = Path(path) if path else gettempdir().joinpath(str(uuid4()))
-        self.mode = mode
+    def __init__(self, path : str = None, mode : str = None, force_temporary=False):
+        self.temporary = path is None or force_temporary
+        self.path = Path(path) if path else Path(gettempdir()).joinpath(str(uuid4()))
+        self.mode = (mode or READ) if path and not force_temporary else WRITE
 
-        if not self.path.exists() and mode == WRITE:
+        if not self.path.exists() and self.mode == WRITE:
             FileInstance.create(self.path)
-
-        with open(join(self.path, 'instance.json'), READ) as f:
+        
+        with open(join(self.path, 'instance.json'), 'r') as f:
             self.config = load(f)
 
         self.instance_id = self.config['id']
@@ -96,7 +104,7 @@ class FileInstance(Instance):
                     source = tmp_target
 
                 # this operation is atomic
-                move(source, target)
+                rename(source, target)
 
                 self.config['files'][path] = instance[path]
 
@@ -164,11 +172,31 @@ class FileInstance(Instance):
     def json(self) -> dict:
         return deepcopy(self.config)
 
-    def serialize(self) -> BytesIO:
-        raise Exception('Not implemented')
+    def serialize(self, as_iter=False, buffer_size=10*1024) -> Union[BytesIO,Iterable[bytes]]:
+        def i():
+            cmd = f'/usr/bin/tar -cf - -C {self.path.parent.absolute()} {self.path.name}'
+            p = Popen(split(cmd), stdout=PIPE, stderr=DEVNULL)
+
+            while b := p.stdout.read(buffer_size):
+                yield b
+
+        return i() if as_iter else iopen(i(), mode='rb')
     
     def deserialize(s : BytesIO):
-        raise Exception('Not implemented')
+        tmpdir = Path(gettempdir()).joinpath(str(uuid4()))
+        tmpdir.mkdir()
+        t = tarfile.open(fileobj=s, mode='r|')
+        t.extractall(path=tmpdir)
+
+        # find instance directory
+        if len(listdir(tmpdir)) != 1:
+            raise Exception('Invalid tarball')
+        else:
+            instance_id = listdir(tmpdir)[0]
+            move(tmpdir.joinpath(instance_id), Path(gettempdir()).joinpath(instance_id))
+            rmtree(tmpdir)
+
+            return FileInstance(Path(gettempdir()).joinpath(instance_id), force_temporary=True)
 
     def _resolve(self, path : Union[str,Path]) -> Path:
         return self.path.joinpath('data', path)
@@ -194,6 +222,10 @@ class FileInstance(Instance):
 
     def __str__(self):
         return f"<FileInstance({self.instance_id}) @ {self.path}>"
+    
+    def __del__(self):
+        if self.temporary and (gettempdir() in str(self.path)):
+            rmtree(self.path)
 
 
 class FileResource:
@@ -207,16 +239,10 @@ class FileResource:
 
         self._reload()
 
-        if self.mode == WRITE and self.status() == FINALIZED:
-            raise Exception('Resource is finalized')
-
         self.resource_id = self.config['id']
 
     def transaction(self, finalize=False) -> CommitManager:
         self._writable_check()
-
-        if self.status() == FINALIZED:
-            raise Exception('Resource is finalized')
 
         return CommitManager(
                     self,
@@ -238,7 +264,7 @@ class FileResource:
             instance_path = instance.path
 
             if stat(join(self.path, 'instances')).st_dev != stat(instance_path).st_dev:
-                tmp_target = self.path.joinpath('instances', 'tmp-{str(uuid7())}')
+                tmp_target = self.path.joinpath('instances', f'tmp-{str(uuid7())}')
                 move(instance_path, tmp_target)
                 instance_path = tmp_target
 
@@ -292,24 +318,20 @@ class FileResource:
                 dumps(
                     { 'id': resource_id,
                       'version': str(uuid7()),
-                      'status': 'open',
                       'instances': []
                     }, indent=4))
 
-    def finalize(self):
-        self._writable_check()
+    def serialize(self, as_iter=False, buffer_size=10*1024) -> Union[BytesIO,Iterable[bytes]]:
+        def i(buffer_size=10*1024):
+            cmd = f'/usr/bin/tar -cf - -C {self.path.parent.absolute()} {self.path.name}'
+            p = Popen(split(cmd), stdout=PIPE, text=False, stderr=DEVNULL)
 
-        if self.status() == FINALIZED:
-            raise Exception('Resource is already finalized')
+            while b := p.stdout.read(buffer_size):
+                yield b
 
-        self.config['status'] = FINALIZED
-        self._save()
-
-    def status(self) -> str:
-        return self.config['status']
-
-    def serialize(self) -> BytesIO:
-        raise Exception('Not implemented')
+            #print(p.returncode, file=stderr)
+            
+        return i(buffer_size) if as_iter else iopen(i(buffer_size))
 
     def json(self) -> dict:
         ret = loads(self.path.joinpath('resource.json').read_text())

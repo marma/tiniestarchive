@@ -11,14 +11,17 @@ from tiniestarchive.utils import chunker
 
 class HttpResource(Resource):
     def __init__(self, url, archive=None, auth = None, mode=READ):
-        self.root_url = url
+        self.url = url
         self.archive = archive
         self.auth = auth
         self.mode = mode
         self.session = Session()
 
+        self.config = loads(self._get(self.url).text)
+        self.resource_id = self.config['id']
+
     def serialize(self) -> BytesIO:
-        r = self._get(urljoin(self.root_url, '_serialize'), stream=True)
+        r = self._get(urljoin(self.url, '_serialize'), stream=True)
         r.raw.decode_stream = True
 
         return r.raw
@@ -38,11 +41,11 @@ class HttpResource(Resource):
 
     def update(self, instance : Instance):
         files = { f: instance.open(f) for f in instance }
-        r = self._post(urljoin(self.root_url, '_add'), files=files)
+        r = self._post(urljoin(self.url, '_add'), files=files)
 
     # TODO serialize instance instead of just POSTing the data directory
     #def update(self, instance : Instance):
-    #    self._post(urljoin(self.root_url, '_update'), data=chunker(instance.serialize()))
+    #    self._post(urljoin(self.url, '_update'), data=chunker(instance.serialize()))
 
     def transaction(self):
         return CommitManager(
@@ -51,7 +54,7 @@ class HttpResource(Resource):
                     finalize=self.archive.operation_mode in [ WORM, PRESERVATION ] if self.archive else False)
 
     def _resolve(self, path):
-        return urljoin(self.root_url, path)
+        return urljoin(self.url, path)
 
     def _get(self, url, params={}, headers={}, stream=False):
         return self.session.get(url,
@@ -70,13 +73,16 @@ class HttpResource(Resource):
                 data=data,
                 stream=stream)
 
-    def __repr__(self):
-        return f"<HttpResource({self.instance_id}) @ {hex(id(self))}>"
+    #def __repr__(self):
+    #    return f"<HttpResource({self.resource_id}) @ {hex(id(self))}>"
+
+    def __str__(self):
+        return f"<HttpResource({self.resource_id}) @ {self.url}>"
 
 
 class HttpArchive(Archive):
     def __init__(self, url):
-        self.root_url = url
+        self.url = url
 
     def new(self) -> HttpResource:
         raise Exception('Not implemented')

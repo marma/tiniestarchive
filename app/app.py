@@ -25,11 +25,7 @@ async def root():
 
 @app.get("/{resource_id}/", response_class=JSONResponse)
 async def get_resource(resource_id : UUID):
-    return archive.get(resource_id).json()
-
-@app.get("/{resource_id}/{filename}", response_class=FileResponse)
-async def get_file(resource_id : UUID, filename: str):
-    return FileResponse(archive._resolve(resource_id, filename))
+    return archive.get(str(resource_id)).json()
 
 @app.post("/{resource_id}/_add")
 async def add(resource_id : UUID, files: List[UploadFile]):
@@ -48,19 +44,21 @@ async def ingest(resource_id : UUID, file: UploadFile):
 
     return "OK"
 
-@app.get("{resource_id}/_serialize", response_class=StreamingResponse)
+@app.get("/{resource_id}/_serialize", response_class=StreamingResponse)
 async def stream(resource_id : UUID):
-    def i():
-        with archive.get(resource_id).serialize() as s:
-            while b := s.read(100*1024):
-                yield b
+    headers = { 'Content-Disposition': f'attachment; filename="{resource_id}.tar"' }
 
     return StreamingResponse(
-            i(),
+            archive.get(str(resource_id)).serialize(as_iter=True),
+            headers=headers,
             media_type='application/tar')
 
+@app.get("/{resource_id}/{filename}", response_class=FileResponse)
+async def get_file(resource_id : UUID, filename: str):
+    return FileResponse(archive._resolve(resource_id, filename))
+
 @app.post("/_ingest")
-async def ingest(resource_id : UUID, file: UploadFile):
+async def ingest(file: UploadFile):
     with FileResource.deserialize(file.file) as resource:
         archive.ingest(resource)
 
